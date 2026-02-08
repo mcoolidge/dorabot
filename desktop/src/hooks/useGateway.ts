@@ -201,13 +201,14 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
 const SESSION_STORAGE_KEY = 'my-agent:sessionId';
 
 export function useGateway(url = 'ws://localhost:18789') {
-  const gatewayToken = (window as any).electronAPI?.gatewayToken || localStorage.getItem('my-agent:gateway-token') || '';
+  const getToken = () => (window as any).electronAPI?.getGatewayToken?.() || (window as any).electronAPI?.gatewayToken || localStorage.getItem('my-agent:gateway-token') || '';
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [chatItems, setChatItems] = useState<ChatItem[]>([]);
   const [channelMessages, setChannelMessages] = useState<ChannelMessage[]>([]);
   const [channelStatuses, setChannelStatuses] = useState<ChannelStatusInfo[]>([]);
   const [agentStatus, setAgentStatus] = useState<string>('idle');
   const [model, setModel] = useState<string>('');
+  const [configData, setConfigData] = useState<Record<string, unknown> | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | undefined>();
   const [pendingQuestion, setPendingQuestion] = useState<AskUserQuestion | null>(null);
@@ -431,8 +432,27 @@ export function useGateway(url = 'ws://localhost:18789') {
       }
 
       case 'status.update': {
-        const d = data as { activeRun?: boolean; source?: string };
+        const d = data as { activeRun?: boolean; source?: string; model?: string };
+        if (d.model) setModel(d.model);
         setAgentStatus(d.activeRun ? `running (${d.source || 'agent'})` : 'idle');
+        break;
+      }
+
+      case 'config.update': {
+        const d = data as { key: string; value: unknown };
+        setConfigData(prev => {
+          if (!prev) return prev;
+          const updated = { ...prev };
+          // handle nested keys like security.approvalMode, browser.enabled
+          const parts = d.key.split('.');
+          if (parts.length === 1) {
+            updated[d.key] = d.value;
+          } else {
+            const [section, field] = parts;
+            updated[section] = { ...(updated[section] as Record<string, unknown> || {}), [field]: d.value };
+          }
+          return updated;
+        });
         break;
       }
 
@@ -475,7 +495,8 @@ export function useGateway(url = 'ws://localhost:18789') {
     ws.onopen = () => {
       if (wsRef.current !== ws) return;
 
-      const token = gatewayToken;
+      const token = getToken();
+      console.log('[gateway] auth token:', token ? `${token.slice(0, 8)}...` : 'MISSING');
       if (token) {
         const authId = ++rpcIdRef.current;
         ws.send(JSON.stringify({ method: 'auth', params: { token }, id: authId }));
@@ -483,8 +504,9 @@ export function useGateway(url = 'ws://localhost:18789') {
           resolve: () => {
             setConnectionState('connected');
             rpc('config.get').then((res) => {
-              const c = res as { model?: string };
-              if (c.model) setModel(c.model);
+              const c = res as Record<string, unknown>;
+              setConfigData(c);
+              if (c.model) setModel(c.model as string);
             }).catch(() => {});
             rpc('sessions.list').then((res) => {
               const arr = res as SessionInfo[];
@@ -509,27 +531,9 @@ export function useGateway(url = 'ws://localhost:18789') {
           },
         });
       } else {
-        setConnectionState('connected');
-        rpc('config.get').then((res) => {
-          const c = res as { model?: string };
-          if (c.model) setModel(c.model);
-        }).catch(() => {});
-        rpc('sessions.list').then((res) => {
-          const arr = res as SessionInfo[];
-          if (Array.isArray(arr)) setSessions(arr);
-        }).catch(() => {});
-        const savedSession = localStorage.getItem(SESSION_STORAGE_KEY);
-        if (savedSession) {
-          rpc('sessions.get', { sessionId: savedSession }).then((res) => {
-            const r = res as { sessionId: string; messages: SessionMessage[] };
-            if (r?.messages) {
-              setChatItems(sessionMessagesToChatItems(r.messages));
-              setCurrentSessionId(savedSession);
-            }
-          }).catch(() => {
-            localStorage.removeItem(SESSION_STORAGE_KEY);
-          });
-        }
+        console.error('[gateway] no auth token available, closing connection');
+        ws.close();
+        setConnectionState('disconnected');
       }
     };
 
@@ -572,7 +576,7 @@ export function useGateway(url = 'ws://localhost:18789') {
     ws.onerror = () => {
       ws.close();
     };
-  }, [url, rpc, handleEvent, gatewayToken]);
+  }, [url, rpc, handleEvent]);
 
   useEffect(() => {
     connect();
@@ -666,11 +670,36 @@ export function useGateway(url = 'ws://localhost:18789') {
     setChatItems([]);
     activeSessionKeyRef.current = 'desktop:dm:default';
     localStorage.removeItem(SESSION_STORAGE_KEY);
-  }, []);
+    // reset session in gateway so next chat.send starts fresh
+    rpc('sessions.reset', { channel: 'desktop', chatId: 'default' }).catch(() => {});
+  }, [rpc]);
 
   const changeModel = useCallback(async (newModel: string) => {
     await rpc('config.set', { key: 'model', value: newModel });
     setModel(newModel);
+  }, [rpc]);
+
+  const setConfig = useCallback(async (key: string, value: unknown) => {
+    // optimistic local update
+    setConfigData(prev => {
+      if (!prev) return prev;
+      const updated = { ...prev };
+      const parts = key.split('.');
+      if (parts.length === 1) {
+        updated[key] = value;
+      } else {
+        const [section, field] = parts;
+        updated[section] = { ...(updated[section] as Record<string, unknown> || {}), [field]: value };
+      }
+      return updated;
+    });
+    await rpc('config.set', { key, value });
+  }, [rpc]);
+
+  const refreshConfig = useCallback(async () => {
+    const res = await rpc('config.get') as Record<string, unknown>;
+    setConfigData(res);
+    if (res.model) setModel(res.model as string);
   }, [rpc]);
 
   const getSecuritySenders = useCallback(async () => {
@@ -719,6 +748,9 @@ export function useGateway(url = 'ws://localhost:18789') {
     setCurrentSessionId,
     model,
     changeModel,
+    configData,
+    setConfig,
+    refreshConfig,
     answerQuestion,
     dismissQuestion,
     pendingApprovals,
