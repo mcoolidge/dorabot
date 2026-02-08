@@ -401,9 +401,9 @@ export function ChatView({ gateway }: Props) {
           />
           {isRunning ? (
             <Button
-              variant="destructive"
+              variant="ghost"
               size="sm"
-              className="h-9 px-3"
+              className="h-9 px-3 text-destructive hover:bg-destructive/10"
               onClick={gateway.abortAgent}
             >
               <Square className="w-3.5 h-3.5 mr-1" />
@@ -411,8 +411,9 @@ export function ChatView({ gateway }: Props) {
             </Button>
           ) : (
             <Button
+              variant="ghost"
               size="sm"
-              className="h-9 px-3"
+              className="h-9 px-3 text-muted-foreground hover:text-primary"
               onClick={handleSend}
               disabled={!input.trim() || sending || gateway.connectionState !== 'connected'}
             >

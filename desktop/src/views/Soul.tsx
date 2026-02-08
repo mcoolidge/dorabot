@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
-import { Sparkles, User, Brain, Bot, Save, RotateCcw, Loader2, Pencil, Eye } from 'lucide-react';
+import { Sparkles, User, Brain, Save, RotateCcw, Loader2, Pencil, Eye } from 'lucide-react';
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
@@ -17,7 +17,6 @@ const FILES = [
   { name: 'SOUL.md', label: 'Soul', icon: Sparkles, description: 'personality, tone, behavior guidelines' },
   { name: 'USER.md', label: 'User', icon: User, description: 'who you are, preferences, context about you' },
   { name: 'MEMORY.md', label: 'Memory', icon: Brain, description: 'persistent facts across sessions' },
-  { name: 'AGENTS.md', label: 'Agents', icon: Bot, description: 'agent-specific instructions and rules' },
 ] as const;
 
 type FileState = {

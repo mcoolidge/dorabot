@@ -20,9 +20,10 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import { FlipWords } from '@/components/aceternity/flip-words';
 import {
   MessageSquare, Phone, Send, Zap, Wrench, Activity, Settings2,
-  FolderOpen, Plus, ChevronRight, Sparkles
+  FolderOpen, Plus, ChevronRight, Sparkles, Sun, Moon
 } from 'lucide-react';
 import { useEffect, useRef } from 'react';
+import { useTheme } from './hooks/useTheme';
 
 type NavTab = 'chat' | 'whatsapp' | 'telegram' | 'automation' | 'tools' | 'soul' | 'status' | 'settings';
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
@@ -44,6 +45,7 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState<SessionFilter>('all');
   const gw = useGateway();
+  const { theme, toggle: toggleTheme } = useTheme();
 
   // show tool notifications as toasts
   const prevNotifCount = useRef(0);
@@ -118,7 +120,7 @@ export default function App() {
         position="top-right"
         toastOptions={{
           className: 'font-mono text-xs',
-          style: { background: 'oklch(0.17 0 0)', border: '1px solid oklch(0.3 0 0)', color: 'oklch(0.925 0 0)' },
+          style: { background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--foreground)' },
         }}
       />
 
@@ -139,13 +141,18 @@ export default function App() {
           </Select>
         </div>
 
-        <div className="ml-auto flex items-center gap-2 text-[11px]" style={{ WebkitAppRegion: 'no-drag' } as any}>
-          <div className={`w-2 h-2 rounded-full ${statusDotColor}`} />
-          {statusWords.length > 1 ? (
-            <FlipWords words={statusWords} duration={2000} className="text-muted-foreground" />
-          ) : (
-            <span className="text-muted-foreground">{statusWords[0]}</span>
-          )}
+        <div className="ml-auto flex items-center gap-3 text-[11px]" style={{ WebkitAppRegion: 'no-drag' } as any}>
+          <button onClick={toggleTheme} className="text-muted-foreground hover:text-foreground transition-colors">
+            {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+          </button>
+          <div className="flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${statusDotColor}`} />
+            {statusWords.length > 1 ? (
+              <FlipWords words={statusWords} duration={2000} className="text-muted-foreground" />
+            ) : (
+              <span className="text-muted-foreground">{statusWords[0]}</span>
+            )}
+          </div>
         </div>
       </div>
 
