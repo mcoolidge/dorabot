@@ -1,8 +1,10 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'node:http';
 import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, watch, type FSWatcher } from 'node:fs';
-import { resolve, join } from 'node:path';
+import { resolve as pathResolve, join } from 'node:path';
 import { homedir } from 'node:os';
+
+const resolve = (p: string) => pathResolve(p.startsWith('~') ? p.replace('~', homedir()) : p);
 import type { Config } from '../config.js';
 import { isPathAllowed, saveConfig, ALWAYS_DENIED, type SecurityConfig, type ToolPolicyConfig } from '../config.js';
 import type { WsMessage, WsResponse, WsEvent, GatewayContext } from './types.js';

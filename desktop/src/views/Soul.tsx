@@ -5,10 +5,11 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
-import { Sparkles, User, Brain, Save, RotateCcw, Loader2, Pencil, Eye } from 'lucide-react';
+import { Sparkles, User, Brain, Save, RotateCcw, Loader2, Pencil, Eye, MessageSquare } from 'lucide-react';
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
+  onSetupChat?: (prompt: string) => void;
 };
 
 const WORKSPACE_DIR = '~/.dorabot/workspace';
@@ -27,7 +28,13 @@ type FileState = {
   error: string | null;
 };
 
-export function SoulView({ gateway }: Props) {
+const SETUP_PROMPTS: Record<string, string> = {
+  'SOUL.md': 'Help me set up my agent\'s personality. Ask me about the tone, style, and behavior I want, then write it to ~/.dorabot/workspace/SOUL.md',
+  'USER.md': 'Help me create my user profile. Ask me about myself — my name, what I do, my preferences — then write it to ~/.dorabot/workspace/USER.md',
+  'MEMORY.md': 'Help me seed my agent\'s memory with key facts. Ask me what I want the agent to always remember, then write it to ~/.dorabot/workspace/MEMORY.md',
+};
+
+export function SoulView({ gateway, onSetupChat }: Props) {
   const disabled = gateway.connectionState !== 'connected';
   const [files, setFiles] = useState<Record<string, FileState>>({});
   const [activeFile, setActiveFile] = useState(FILES[0].name);
@@ -187,10 +194,37 @@ export function SoulView({ gateway }: Props) {
               </ScrollArea>
             </ResizablePanel>
           </ResizablePanelGroup>
+        ) : !file?.content ? (
+          <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-8">
+            <fileMeta.icon className="w-8 h-8 text-muted-foreground/40" />
+            <div className="text-sm text-muted-foreground">no {fileMeta.label.toLowerCase()} configured yet</div>
+            <div className="flex gap-2">
+              {onSetupChat && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  className="h-7 text-[11px]"
+                  onClick={() => onSetupChat(SETUP_PROMPTS[activeFile])}
+                >
+                  <MessageSquare className="w-3 h-3 mr-1.5" />
+                  set up with chat
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px]"
+                onClick={() => setEditing(true)}
+              >
+                <Pencil className="w-3 h-3 mr-1.5" />
+                write manually
+              </Button>
+            </div>
+          </div>
         ) : (
           <ScrollArea className="h-full">
             <div className="markdown-viewer p-4 text-[12px]">
-              <ReactMarkdown>{file?.content || '*empty — click edit to add content*'}</ReactMarkdown>
+              <ReactMarkdown>{file.content}</ReactMarkdown>
             </div>
           </ScrollArea>
         )}

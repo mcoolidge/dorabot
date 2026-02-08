@@ -90,7 +90,7 @@ export default function App() {
       case 'tools':
         return <ToolsView gateway={gw} />;
       case 'soul':
-        return <SoulView gateway={gw} />;
+        return <SoulView gateway={gw} onSetupChat={(prompt) => { gw.sendMessage(prompt); setActiveTab('chat'); }} />;
       case 'status':
         return <StatusView gateway={gw} />;
       case 'settings':
