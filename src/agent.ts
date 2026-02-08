@@ -37,7 +37,7 @@ function cleanEnvForSdk(): Record<string, string> {
     env[key] = val;
   }
   // use a clean tmpdir so SDK file watcher doesn't hit socket files
-  const sdkTmp = join(homedir(), '.my-agent', 'tmp');
+  const sdkTmp = join(homedir(), '.dorabot', 'tmp');
   mkdirSync(sdkTmp, { recursive: true });
   env.TMPDIR = sdkTmp;
   return env;
@@ -154,7 +154,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
       tools: { type: 'preset', preset: 'claude_code' } as any,
       agents: agents as any,
       hooks: hooks as any,
-      mcpServers: { 'my-agent-tools': mcpServer } as any,
+      mcpServers: { 'dorabot-tools': mcpServer } as any,
       resume: resumeId,
       permissionMode: config.permissionMode as any,
       allowDangerouslySkipPermissions: config.permissionMode === 'bypassPermissions',
@@ -316,7 +316,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
       tools: { type: 'preset', preset: 'claude_code' },
       agents,
       hooks: hooks as any,
-      mcpServers: { 'my-agent-tools': mcpServer },
+      mcpServers: { 'dorabot-tools': mcpServer },
       resume: resumeId,
       permissionMode: config.permissionMode,
       allowDangerouslySkipPermissions: config.permissionMode === 'bypassPermissions',

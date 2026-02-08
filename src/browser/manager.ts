@@ -16,7 +16,7 @@ export type BrowserConfig = {
 };
 
 const DEFAULT_CDP_PORT = 19222;
-const DEFAULT_PROFILE_DIR = join(homedir(), '.my-agent', 'browser', 'profile');
+const DEFAULT_PROFILE_DIR = join(homedir(), '.dorabot', 'browser', 'profile');
 
 // singleton state
 let browser: Browser | null = null;

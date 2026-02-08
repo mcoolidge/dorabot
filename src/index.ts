@@ -3,6 +3,7 @@
 import { parseArgs } from 'node:util';
 import { createInterface } from 'node:readline';
 import { loadConfig } from './config.js';
+import { migrateDataDir } from './migrate.js';
 import { runAgent, streamAgent } from './agent.js';
 import { SessionManager } from './session/manager.js';
 import { getEligibleSkills } from './skills/loader.js';
