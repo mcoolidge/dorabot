@@ -52,9 +52,9 @@ you can ask up to 4 questions per tool call if they're related (e.g., name + tim
 
 ## phase 1: learn about the user
 
-use AskUserQuestion for each of these. adapt based on what they share — skip questions they've already answered.
+start by asking their name. then ask if they want you to look them up online (linkedin, twitter/x, personal site) to pre-fill info. if they say yes, use WebSearch + WebFetch to pull key details (role, company, interests, location), confirm what you found, then only ask about stuff you couldn't find.
 
-things to learn:
+things to learn (ask or discover via lookup):
 
 - **name** — what they go by, what they want you to call them
 - **timezone** — where they are

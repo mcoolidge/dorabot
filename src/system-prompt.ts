@@ -203,7 +203,9 @@ message({
 })
 \`\`\`
 
-The gateway does NOT auto-send on messaging channels. If you don't use the message tool, your reply won't be sent.${formattingSection}
+The gateway does NOT auto-send on messaging channels. If you don't use the message tool, your reply won't be sent.
+
+**Keep responses concise.** Chat messages should be short and to the point — no walls of text. Use brief replies, bullet points, or short paragraphs. Save long explanations for when the user explicitly asks.${formattingSection}
 
 **Silent replies:**
 To complete a task without sending anything, respond with exactly:
