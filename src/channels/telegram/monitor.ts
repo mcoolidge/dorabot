@@ -146,9 +146,6 @@ export async function startTelegramMonitor(opts: TelegramMonitorOptions): Promis
         console.log(`[telegram] unauthorized sender: ${senderId} (${msg.from?.first_name || 'unknown'})`);
         return;
       }
-    } else if (opts.allowFrom && opts.allowFrom.length === 0) {
-      console.log('[telegram] no authorized senders configured, rejecting all messages');
-      return;
     }
 
     const inbound: InboundMessage = {

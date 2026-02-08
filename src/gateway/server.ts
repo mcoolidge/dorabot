@@ -393,9 +393,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       if (pending.timeout) clearTimeout(pending.timeout);
       pending.resolve({ approved, reason });
     },
-    onQuestionResponse: (requestId, _selectedIndex, label) => {
+    onQuestionResponse: (requestId, selectedIndex, label) => {
+      console.log(`[canUseTool] question response: requestId=${requestId} index=${selectedIndex} label=${label}`);
       const pending = pendingTgQuestions.get(requestId);
-      if (!pending) return;
+      if (!pending) {
+        console.log(`[canUseTool] no pending question for ${requestId} (map size: ${pendingTgQuestions.size})`);
+        return;
+      }
       pendingTgQuestions.delete(requestId);
       pending.resolve(label);
     },
@@ -509,30 +513,40 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
       // telegram: send inline keyboard per question
       if (runChannel === 'telegram' && runChatId) {
+        console.log(`[canUseTool] AskUserQuestion on telegram, chatId=${runChatId}, ${(questions as any[]).length} question(s)`);
         const answers: Record<string, string> = {};
         for (let qi = 0; qi < (questions as any[]).length; qi++) {
           const q = (questions as any[])[qi];
+          const questionText: string = q.question || `Question ${qi + 1}`;
           const opts = (q.options || []) as { label: string; description?: string }[];
           if (!opts.length) continue;
 
           const requestId = randomUUID();
-          channelManager.sendQuestion({
-            requestId,
-            chatId: runChatId,
-            question: q.question || `Question ${qi + 1}`,
-            options: opts,
-          }).catch(() => {});
+          try {
+            await channelManager.sendQuestion({
+              requestId,
+              chatId: runChatId,
+              question: questionText,
+              options: opts,
+            });
+            console.log(`[canUseTool] sent question inline keyboard: ${requestId}`);
+          } catch (err) {
+            console.error(`[canUseTool] failed to send question:`, err);
+            answers[questionText] = opts[0]?.label || '';
+            continue;
+          }
 
           const label = await new Promise<string>((resolve) => {
             pendingTgQuestions.set(requestId, { resolve, options: opts });
             setTimeout(() => {
               if (pendingTgQuestions.has(requestId)) {
                 pendingTgQuestions.delete(requestId);
-                resolve(opts[0]?.label || ''); // default to first option on timeout
+                resolve(opts[0]?.label || '');
               }
             }, 120000);
           });
-          answers[`q${qi}`] = label;
+          // SDK expects question text as key, not q0/q1
+          answers[questionText] = label;
         }
         return {
           behavior: 'allow' as const,
