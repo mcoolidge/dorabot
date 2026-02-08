@@ -37,11 +37,23 @@ const TOOL_EMOJI: Record<string, string> = {
 };
 
 const TOOL_LABEL: Record<string, string> = {
+  Read: 'read', Write: 'wrote', Edit: 'edited',
+  Glob: 'searched files', Grep: 'searched', Bash: 'ran',
+  WebFetch: 'fetched', WebSearch: 'searched web', Task: 'ran task',
+  AskUserQuestion: 'asked', TodoWrite: 'updated tasks',
+  NotebookEdit: 'edited notebook', message: 'replied',
+  screenshot: 'took screenshot', browser: 'browsed',
+  schedule_reminder: 'scheduled', schedule_recurring: 'scheduled',
+  schedule_cron: 'scheduled', list_reminders: 'listed reminders',
+  cancel_reminder: 'cancelled reminder',
+};
+
+const TOOL_ACTIVE_LABEL: Record<string, string> = {
   Read: 'reading', Write: 'writing', Edit: 'editing',
   Glob: 'searching files', Grep: 'searching', Bash: 'running',
-  WebFetch: 'fetching', WebSearch: 'searching', Task: 'running task',
+  WebFetch: 'fetching', WebSearch: 'searching web', Task: 'running task',
   AskUserQuestion: 'asking', TodoWrite: 'updating tasks',
-  NotebookEdit: 'editing notebook', message: 'sending message',
+  NotebookEdit: 'editing notebook', message: 'replying',
   screenshot: 'taking screenshot', browser: 'browsing',
   schedule_reminder: 'scheduling', schedule_recurring: 'scheduling',
   schedule_cron: 'scheduling', list_reminders: 'listing reminders',
@@ -71,7 +83,7 @@ function extractToolDetail(name: string, input: Record<string, unknown>): string
     }
     case 'WebSearch': return `"${String(input.query || '').slice(0, 35)}"`;
     case 'Task': return String(input.description || '').slice(0, 30);
-    case 'message': return String(input.channel || '');
+    case 'message': return 'replying';
     case 'browser': return String(input.action || '');
     default: return '';
   }
@@ -82,16 +94,24 @@ type ToolEntry = { name: string; detail: string };
 function buildToolStatusText(completed: ToolEntry[], current: ToolEntry | null): string {
   const lines: string[] = [];
   for (const t of completed) {
-    if (t.name === 'message') continue; // skip message tool — keep it subtle
-    const emoji = TOOL_EMOJI[t.name] || '\u2705';
-    const detail = t.detail || (TOOL_LABEL[t.name] || t.name);
-    lines.push(`\u2705 ${emoji} ${detail}`);
+    if (t.name === 'message') {
+      lines.push(`\u2705 \ud83d\udcac replied`);
+    } else {
+      const emoji = TOOL_EMOJI[t.name] || '\u2705';
+      const label = TOOL_LABEL[t.name] || t.name;
+      const text = t.detail ? `${label} ${t.detail}` : label;
+      lines.push(`\u2705 ${emoji} ${text}`);
+    }
   }
   if (current) {
-    const emoji = TOOL_EMOJI[current.name] || '\u23f3';
-    const label = TOOL_LABEL[current.name] || current.name;
-    const detail = current.detail ? `${label} ${current.detail}` : `${label}...`;
-    lines.push(`\u23f3 ${emoji} ${detail}`);
+    if (current.name === 'message') {
+      lines.push(`\ud83d\udcac replying...`);
+    } else {
+      const emoji = TOOL_EMOJI[current.name] || '\u23f3';
+      const label = TOOL_ACTIVE_LABEL[current.name] || current.name;
+      const text = current.detail ? `${label} ${current.detail}` : `${label}...`;
+      lines.push(`\u23f3 ${emoji} ${text}`);
+    }
   }
   return lines.join('\n');
 }
@@ -665,21 +685,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 if (tl) {
                   // push previous tool as completed
                   if (tl.current) tl.completed.push({ name: tl.current.name, detail: tl.current.detail });
-                  // skip message tool from status — it's the final action, keep it subtle
-                  if (toolName === 'message') {
-                    tl.current = null;
-                  } else {
-                    tl.current = { name: toolName, inputJson: '', detail: '' };
-                    // throttled status edit
-                    const sm = statusMessages.get(sessionKey);
-                    if (sm) {
-                      const now = Date.now();
-                      if (now - tl.lastEditAt >= 2500) {
-                        tl.lastEditAt = now;
-                        const text = buildToolStatusText(tl.completed, tl.current);
-                        const h = getChannelHandler(sm.channel);
-                        if (h) { try { await h.edit(sm.messageId, text, sm.chatId); } catch {} }
-                      }
+                  tl.current = { name: toolName, inputJson: '', detail: '' };
+                  // throttled status edit
+                  const sm = statusMessages.get(sessionKey);
+                  if (sm) {
+                    const now = Date.now();
+                    if (now - tl.lastEditAt >= 2500) {
+                      tl.lastEditAt = now;
+                      const text = buildToolStatusText(tl.completed, tl.current);
+                      const h = getChannelHandler(sm.channel);
+                      if (h) { try { await h.edit(sm.messageId, text, sm.chatId); } catch {} }
                     }
                   }
                 }
