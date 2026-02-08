@@ -1,6 +1,7 @@
 import { hostname } from 'node:os';
 import type { Config } from './config.js';
 import type { Skill } from './skills/loader.js';
+import { type WorkspaceFiles, buildWorkspaceSection, WORKSPACE_DIR } from './workspace.js';
 
 export type SystemPromptOptions = {
   config: Config;
@@ -11,6 +12,7 @@ export type SystemPromptOptions = {
   timezone?: string;
   ownerIdentity?: string;
   extraContext?: string;
+  workspaceFiles?: WorkspaceFiles;
 };
 
 export function buildSystemPrompt(opts: SystemPromptOptions): string {
@@ -25,36 +27,41 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
   // identity
   sections.push('You are a personal assistant running inside my-agent.');
 
-  // tooling section
+  // tooling
   if (tools.length > 0) {
     sections.push(`## Tooling
 
 Available tools: ${tools.join(', ')}
 
-Use these tools to help complete tasks. The built-in Claude Code tools (Read, Write, Edit, Bash, Glob, Grep, WebFetch, WebSearch) are available via the preset.`);
+Tool names are case-sensitive. Call tools exactly as listed.
+Built-in Claude Code tools (Read, Write, Edit, Bash, Glob, Grep, WebFetch, WebSearch) are available via the preset.
+If a task is complex or takes many steps, spawn a sub-agent via the Task tool.`);
   }
 
-  // tool call style
+  // tool call style (from openclaw — don't narrate routine calls)
   sections.push(`## Tool Call Style
 
-- Use tools proactively to gather information before answering
-- Prefer reading files over guessing their contents
-- Chain multiple tool calls when needed
-- Report errors clearly if tools fail`);
+Don't narrate routine tool calls — just call the tool.
+Narrate only when it helps: multi-step work, complex problems, sensitive actions (deletions, sends), or when the user asks.
+Keep narration brief. Use plain language.
+Prefer reading files over guessing their contents.
+Chain multiple tool calls when needed.
+Report errors clearly.`);
 
-  // safety section
+  // safety
   sections.push(`## Safety
 
 - No independent goals (no self-preservation, replication, resource acquisition, power-seeking)
-- Avoid long-term plans beyond user's request
-- Prioritize safety and human oversight
+- Prioritize safety and human oversight over task completion
 - Pause and ask if instructions conflict
-- Comply with stop/pause/audit requests
-- Never bypass safeguards
-- Don't manipulate to expand access
-- Don't copy yourself or change system prompts/safety rules`);
+- Comply with stop/pause/audit requests, never bypass safeguards
+- Don't manipulate to expand access or disable safeguards
+- Don't exfiltrate private data. Ever.
+- Don't run destructive commands without asking
+- Safe to do freely: read, explore, organize, search web
+- Ask first: emails, messages, public posts, anything leaving the machine`);
 
-  // skills section (only in full mode)
+  // skills (only in full mode)
   if (config.systemPromptMode === 'full' && skills.length > 0) {
     const skillList = skills.map(s => `- ${s.name}: ${s.description} [${s.path}]`).join('\n');
     sections.push(`## Skills (mandatory)
@@ -69,12 +76,38 @@ ${skillList}
 </available_skills>`);
   }
 
-  // workspace
+  // workspace context (SOUL.md, USER.md, AGENTS.md, MEMORY.md)
+  if (config.systemPromptMode === 'full' && opts.workspaceFiles) {
+    const wsSection = buildWorkspaceSection(opts.workspaceFiles);
+    if (wsSection) {
+      sections.push(wsSection);
+    }
+  }
+
+  // memory instructions (only in full mode, workspace exists)
+  if (config.systemPromptMode === 'full') {
+    sections.push(`## Memory
+
+Workspace: ${WORKSPACE_DIR}
+
+Your persistent memory lives in ~/.my-agent/workspace/MEMORY.md. Use it.
+
+**When to write memory:**
+- User shares preferences, facts about themselves, or communication style → update USER.md or MEMORY.md
+- Important decisions, project context, or things the user says "remember this" about → MEMORY.md
+- If you want something to survive between sessions, write it to a file. Mental notes don't persist.
+
+**How:** Use the Write or Edit tool to update files in ~/.my-agent/workspace/.
+
+**Privacy:** MEMORY.md content is loaded into your system prompt every session. Don't store secrets or credentials there.`);
+  }
+
+  // workspace dir
   sections.push(`## Workspace
 
 Working directory: ${config.cwd}`);
 
-  // sandbox info
+  // sandbox
   if (config.sandbox.enabled) {
     sections.push(`## Sandbox
 
@@ -97,7 +130,7 @@ ${ownerIdentity}`);
 ${now.toLocaleString('en-US', { timeZone: timezone })} (${timezone})`);
   }
 
-  // runtime info
+  // runtime
   const runtimeParts = [
     `host=${hostname()}`,
     `os=${process.platform} (${process.arch})`,
@@ -118,6 +151,7 @@ ${now.toLocaleString('en-US', { timeZone: timezone })} (${timezone})`);
 
 ${runtimeParts.join(' | ')}`);
 
+  // connected channels
   if (opts.connectedChannels && opts.connectedChannels.length > 0) {
     const lines = opts.connectedChannels.map(c => `- ${c.channel}: chatId=${c.chatId}`);
     sections.push(`## Connected Channels
@@ -126,7 +160,7 @@ You can reach the owner on these channels using the message tool with the given 
 ${lines.join('\n')}`);
   }
 
-  // messaging section (only in full mode)
+  // messaging (only in full mode)
   if (config.systemPromptMode === 'full') {
     const isMessagingChannel = channel && ['whatsapp', 'telegram'].includes(channel);
 
@@ -196,6 +230,14 @@ Use the 'message' tool to send messages to channels:
 
 Respond with "SILENT_REPLY" to suppress all output.`);
     }
+  }
+
+  // heartbeat (only in full mode)
+  if (config.systemPromptMode === 'full' && config.heartbeat?.enabled) {
+    sections.push(`## Heartbeat
+
+If you receive a heartbeat poll and there is nothing that needs attention, reply exactly: HEARTBEAT_OK
+If something needs attention, do NOT include HEARTBEAT_OK — reply with the alert text instead.`);
   }
 
   // browser (only in full mode)

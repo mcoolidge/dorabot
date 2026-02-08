@@ -2,13 +2,29 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { Config } from './config.js';
+import type { Config, SandboxSettings } from './config.js';
+
+function resolveSandbox(sandbox: SandboxSettings, channel?: string): SandboxSettings {
+  const mode = sandbox.mode || 'off';
+  let enabled = sandbox.enabled ?? false;
+
+  if (mode === 'off') {
+    enabled = false;
+  } else if (mode === 'all') {
+    enabled = true;
+  } else if (mode === 'non-main') {
+    enabled = !!channel && channel !== 'desktop';
+  }
+
+  return { ...sandbox, enabled };
+}
 import { buildSystemPrompt } from './system-prompt.js';
 import { createAgentMcpServer, getCustomToolNames } from './tools/index.js';
 import { getEligibleSkills, matchSkillToPrompt, type Skill } from './skills/loader.js';
 import { createDefaultHooks, mergeHooks, type HookEvent, type HookCallbackMatcher } from './hooks/index.js';
 import { getAllAgents } from './agents/definitions.js';
 import { SessionManager, sdkMessageToSession, type SessionMessage } from './session/manager.js';
+import { loadWorkspaceFiles, ensureWorkspace } from './workspace.js';
 
 // clean env for SDK subprocess - strip vscode vars that cause file watcher crashes
 function cleanEnvForSdk(): Record<string, string> {
@@ -98,6 +114,10 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
   const customTools = getCustomToolNames();
   const allTools = [...builtInTools, ...customTools];
 
+  // load workspace files (SOUL.md, USER.md, MEMORY.md, etc.)
+  ensureWorkspace();
+  const workspaceFiles = loadWorkspaceFiles();
+
   // build system prompt
   const systemPrompt = buildSystemPrompt({
     config,
@@ -108,6 +128,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     timezone,
     ownerIdentity,
     extraContext,
+    workspaceFiles,
   });
 
   // create MCP server for custom tools
@@ -123,7 +144,8 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     : defaultHooks;
 
   // run query
-  console.log(`[agent] runAgent starting: model=${config.model} permissionMode=${config.permissionMode} sessionId=${sessionId} resumeId=${resumeId || 'none'}`);
+  const effectiveSandbox = resolveSandbox(config.sandbox, channel);
+  console.log(`[agent] runAgent starting: model=${config.model} permissionMode=${config.permissionMode} sessionId=${sessionId} resumeId=${resumeId || 'none'} sandbox=${effectiveSandbox.enabled ? 'on' : 'off'}`);
   const q = query({
     prompt: enhancedPrompt,
     options: {
@@ -136,7 +158,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
       resume: resumeId,
       permissionMode: config.permissionMode as any,
       allowDangerouslySkipPermissions: config.permissionMode === 'bypassPermissions',
-      sandbox: config.sandbox as any,
+      sandbox: effectiveSandbox as any,
       cwd: config.cwd,
       env: cleanEnvForSdk(),
       maxTurns: 50,
@@ -260,6 +282,10 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
   const customTools = getCustomToolNames();
   const allTools = [...builtInTools, ...customTools];
 
+  // load workspace files (SOUL.md, USER.md, MEMORY.md, etc.)
+  ensureWorkspace();
+  const workspaceFiles = loadWorkspaceFiles();
+
   const systemPrompt = buildSystemPrompt({
     config,
     skills,
@@ -269,6 +295,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     timezone,
     ownerIdentity,
     extraContext,
+    workspaceFiles,
   });
 
   const mcpServer = createAgentMcpServer();
@@ -279,7 +306,8 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     ? mergeHooks(defaultHooks, customHooks)
     : defaultHooks;
 
-  console.log(`[agent] streamAgent starting: model=${config.model} permissionMode=${config.permissionMode} sessionId=${sessionId} resumeId=${resumeId || 'none'}`);
+  const effectiveSandbox = resolveSandbox(config.sandbox, channel);
+  console.log(`[agent] streamAgent starting: model=${config.model} permissionMode=${config.permissionMode} sessionId=${sessionId} resumeId=${resumeId || 'none'} sandbox=${effectiveSandbox.enabled ? 'on' : 'off'} channel=${channel || 'desktop'}`);
   const q = query({
     prompt: enhancedPrompt,
     options: {
@@ -292,7 +320,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
       resume: resumeId,
       permissionMode: config.permissionMode,
       allowDangerouslySkipPermissions: config.permissionMode === 'bypassPermissions',
-      sandbox: config.sandbox,
+      sandbox: effectiveSandbox,
       cwd: config.cwd,
       env: cleanEnvForSdk(),
       maxTurns: 50,
