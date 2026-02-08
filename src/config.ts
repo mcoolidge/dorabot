@@ -6,15 +6,28 @@ let loadedConfigPath: string | undefined;
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk';
 
+export type SandboxMode = 'off' | 'non-main' | 'all';
+export type SandboxScope = 'session' | 'agent' | 'shared';
+export type WorkspaceAccess = 'none' | 'ro' | 'rw';
+
 export type SandboxSettings = {
   enabled?: boolean;
+  mode?: SandboxMode;
+  scope?: SandboxScope;
+  workspaceAccess?: WorkspaceAccess;
   autoAllowBashIfSandboxed?: boolean;
   excludedCommands?: string[];
   allowUnsandboxedCommands?: boolean;
   network?: {
+    enabled?: boolean;
     allowLocalBinding?: boolean;
     allowUnixSockets?: string[];
   };
+};
+
+export type ToolPolicyConfig = {
+  allow?: string[];
+  deny?: string[];
 };
 
 export type AgentDefinition = {
@@ -52,6 +65,9 @@ export type WhatsAppChannelConfig = {
   dmPolicy?: 'open' | 'allowlist';
   groupPolicy?: 'open' | 'allowlist' | 'disabled';
   allowFrom?: string[];
+  tools?: ToolPolicyConfig;
+  allowedPaths?: string[];
+  deniedPaths?: string[];
 };
 
 export type TelegramChannelConfig = {
@@ -62,6 +78,9 @@ export type TelegramChannelConfig = {
   dmPolicy?: 'open' | 'allowlist';
   groupPolicy?: 'open' | 'allowlist' | 'disabled';
   allowFrom?: string[];
+  tools?: ToolPolicyConfig;
+  allowedPaths?: string[];
+  deniedPaths?: string[];
 };
 
 export type ChannelsConfig = {
@@ -87,6 +106,7 @@ export type BrowserConfig = {
 
 export type SecurityConfig = {
   approvalMode?: 'approve-sensitive' | 'autonomous' | 'lockdown';
+  tools?: ToolPolicyConfig;
 };
 
 export type Config = {
@@ -197,7 +217,11 @@ export const ALWAYS_DENIED = [
   '~/.config/nanoclaw',
 ];
 
-export function isPathAllowed(targetPath: string, config: Config): boolean {
+export function isPathAllowed(
+  targetPath: string,
+  config: Config,
+  channelOverride?: { allowedPaths?: string[]; deniedPaths?: string[] },
+): boolean {
   const home = homedir();
   let resolved: string;
   try {
@@ -206,9 +230,16 @@ export function isPathAllowed(targetPath: string, config: Config): boolean {
     resolved = resolve(targetPath);
   }
 
-  const denied = (config.gateway?.deniedPaths || ALWAYS_DENIED).map(p => resolve(p.replace(/^~/, home)));
+  // denied: always_denied + global + channel-specific (all merged)
+  const globalDenied = config.gateway?.deniedPaths || ALWAYS_DENIED;
+  const channelDenied = channelOverride?.deniedPaths || [];
+  const denied = [...globalDenied, ...channelDenied].map(p => resolve(p.replace(/^~/, home)));
   if (denied.some(d => resolved.startsWith(d))) return false;
 
-  const allowed = (config.gateway?.allowedPaths || [home, '/tmp']).map(p => resolve(p.replace(/^~/, home)));
+  // allowed: channel-specific overrides global if set
+  const allowedRaw = channelOverride?.allowedPaths?.length
+    ? channelOverride.allowedPaths
+    : (config.gateway?.allowedPaths || [home, '/tmp']);
+  const allowed = allowedRaw.map(p => resolve(p.replace(/^~/, home)));
   return allowed.some(a => resolved.startsWith(a));
 }

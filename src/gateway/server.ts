@@ -4,7 +4,7 @@ import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSy
 import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { Config } from '../config.js';
-import { isPathAllowed, saveConfig, type SecurityConfig } from '../config.js';
+import { isPathAllowed, saveConfig, ALWAYS_DENIED, type SecurityConfig, type ToolPolicyConfig } from '../config.js';
 import type { WsMessage, WsResponse, WsEvent, GatewayContext } from './types.js';
 import { SessionRegistry } from './session-registry.js';
 import { ChannelManager } from './channel-manager.js';
@@ -18,7 +18,7 @@ import { getAllChannelStatuses } from '../channels/index.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { setCronRunner } from '../tools/index.js';
 import { randomUUID, randomBytes } from 'node:crypto';
-import { classifyToolCall, cleanToolName, type Tier } from './tool-policy.js';
+import { classifyToolCall, cleanToolName, isToolAllowed, type Tier } from './tool-policy.js';
 
 const DEFAULT_PORT = 18789;
 const DEFAULT_HOST = 'localhost';
@@ -371,7 +371,32 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     });
   }
 
+  function getChannelToolPolicy(channel?: string): ToolPolicyConfig | undefined {
+    if (!channel || channel === 'desktop') return undefined;
+    if (channel === 'whatsapp') return config.channels?.whatsapp?.tools;
+    if (channel === 'telegram') return config.channels?.telegram?.tools;
+    return undefined;
+  }
+
+  function getChannelPathOverride(channel?: string): { allowedPaths?: string[]; deniedPaths?: string[] } | undefined {
+    if (!channel || channel === 'desktop') return undefined;
+    const ch = channel === 'whatsapp' ? config.channels?.whatsapp : channel === 'telegram' ? config.channels?.telegram : undefined;
+    if (!ch) return undefined;
+    if (!ch.allowedPaths?.length && !ch.deniedPaths?.length) return undefined;
+    return { allowedPaths: ch.allowedPaths, deniedPaths: ch.deniedPaths };
+  }
+
+  function makeCanUseTool(runChannel?: string) {
+    return async (toolName: string, input: Record<string, unknown>) => {
+      return canUseToolImpl(toolName, input, runChannel);
+    };
+  }
+
   const canUseTool = async (toolName: string, input: Record<string, unknown>) => {
+    return canUseToolImpl(toolName, input, undefined);
+  };
+
+  const canUseToolImpl = async (toolName: string, input: Record<string, unknown>, runChannel?: string) => {
     // AskUserQuestion — route to desktop
     if (toolName === 'AskUserQuestion') {
       const questions = input.questions as unknown[];
@@ -409,9 +434,52 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       };
     }
 
-    // classify tool call (use clean name so FORM_MAP in desktop matches)
+    // check tool allow/deny policy (channel-specific + global)
     const cleanName = cleanToolName(toolName);
+    const channelToolPolicy = getChannelToolPolicy(runChannel);
+    const globalToolPolicy = config.security?.tools;
+    if (!isToolAllowed(cleanName, channelToolPolicy, globalToolPolicy)) {
+      return { behavior: 'deny' as const, message: `tool '${cleanName}' blocked by policy` };
+    }
+
+    // classify tool call (use clean name so FORM_MAP in desktop matches)
     const tier = classifyToolCall(cleanName, input);
+
+    // respect permissionMode and approvalMode
+    const approvalMode = config.security?.approvalMode || 'approve-sensitive';
+
+    if (config.permissionMode === 'bypassPermissions' || config.permissionMode === 'dontAsk' || approvalMode === 'autonomous') {
+      if (tier !== 'auto-allow') {
+        broadcast({ event: 'agent.tool_notify', data: { toolName: cleanName, input, tier, timestamp: Date.now() } });
+      }
+      return { behavior: 'allow' as const, updatedInput: input };
+    }
+
+    if (config.permissionMode === 'acceptEdits') {
+      const isEdit = ['Write', 'Edit'].includes(cleanName);
+      if (isEdit || tier === 'auto-allow') {
+        return { behavior: 'allow' as const, updatedInput: input };
+      }
+      if (tier === 'notify') {
+        broadcast({ event: 'agent.tool_notify', data: { toolName: cleanName, input, tier, timestamp: Date.now() } });
+        return { behavior: 'allow' as const, updatedInput: input };
+      }
+    }
+
+    // lockdown — require approval for everything except reads
+    if (approvalMode === 'lockdown' && tier !== 'auto-allow') {
+      const requestId = randomUUID();
+      broadcast({
+        event: 'agent.tool_approval',
+        data: { requestId, toolName: cleanName, input, tier: 'require-approval', timestamp: Date.now() },
+      });
+      channelManager.sendApprovalRequest({ requestId, toolName: cleanName, input }).catch(() => {});
+      const decision = await waitForApproval(requestId, cleanName, input);
+      if (decision.approved) {
+        return { behavior: 'allow' as const, updatedInput: decision.modifiedInput || input };
+      }
+      return { behavior: 'deny' as const, message: decision.reason || 'user denied' };
+    }
 
     if (tier === 'auto-allow') {
       return { behavior: 'allow' as const, updatedInput: input };
@@ -441,6 +509,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     return { behavior: 'allow' as const, updatedInput: input };
   };
 
+  // track which channel each active run belongs to (for tool policy lookups)
+  const activeRunChannels = new Map<string, string>();
+
   // agent run queue (one per session key)
   const runQueues = new Map<string, Promise<void>>();
   const activeAbortControllers = new Map<string, AbortController>();
@@ -460,6 +531,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
     const run = prev.then(async () => {
       sessionRegistry.setActiveRun(sessionKey, true);
+      if (channel) activeRunChannels.set(sessionKey, channel);
       broadcast({ event: 'status.update', data: { activeRun: true, source, sessionKey } });
       broadcast({ event: 'agent.user_message', data: { source, sessionKey, prompt, timestamp: Date.now() } });
       const runStart = Date.now();
@@ -481,7 +553,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           channel,
           connectedChannels: connected,
           extraContext,
-          canUseTool,
+          canUseTool: makeCanUseTool(channel),
           abortController,
         });
 
@@ -636,6 +708,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         });
       } finally {
         activeAbortControllers.delete(sessionKey);
+        activeRunChannels.delete(sessionKey);
         sessionRegistry.setActiveRun(sessionKey, false);
         broadcast({ event: 'status.update', data: { activeRun: false, source, sessionKey } });
       }
@@ -877,7 +950,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!key) return { id, error: 'key required' };
           if (key === 'model' && typeof value === 'string') {
             config.model = value;
-            broadcast({ event: 'status.update', data: { model: value } });
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
             return { id, result: { model: value } };
           }
 
@@ -943,6 +1017,38 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             return { id, result: { key, value } };
           }
 
+          // sandbox settings
+          const sandboxMatch = key.match(/^sandbox\.(mode|scope|workspaceAccess|enabled)$/);
+          if (sandboxMatch) {
+            const field = sandboxMatch[1];
+            if (field === 'mode') {
+              const valid = ['off', 'non-main', 'all'];
+              if (!valid.includes(value as string)) return { id, error: `sandbox.mode must be one of: ${valid.join(', ')}` };
+              config.sandbox.mode = value as any;
+            } else if (field === 'scope') {
+              const valid = ['session', 'agent', 'shared'];
+              if (!valid.includes(value as string)) return { id, error: `sandbox.scope must be one of: ${valid.join(', ')}` };
+              config.sandbox.scope = value as any;
+            } else if (field === 'workspaceAccess') {
+              const valid = ['none', 'ro', 'rw'];
+              if (!valid.includes(value as string)) return { id, error: `sandbox.workspaceAccess must be one of: ${valid.join(', ')}` };
+              config.sandbox.workspaceAccess = value as any;
+            } else if (field === 'enabled') {
+              config.sandbox.enabled = !!value;
+            }
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'sandbox.network.enabled' && typeof value === 'boolean') {
+            if (!config.sandbox.network) config.sandbox.network = {};
+            config.sandbox.network.enabled = value;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
           return { id, error: `unsupported config key: ${key}` };
         }
 
@@ -996,6 +1102,23 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             const buffer = readFileSync(resolved);
             const base64 = buffer.toString('base64');
             return { id, result: { content: base64, path: resolved } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'fs.write': {
+          const filePath = params?.path as string;
+          const content = params?.content as string;
+          if (!filePath) return { id, error: 'path required' };
+          if (typeof content !== 'string') return { id, error: 'content required' };
+          const resolved = resolve(filePath);
+          if (!isPathAllowed(resolved, config)) {
+            return { id, error: `path not allowed: ${resolved}` };
+          }
+          try {
+            writeFileSync(resolved, content, 'utf-8');
+            return { id, result: { path: resolved } };
           } catch (err) {
             return { id, error: err instanceof Error ? err.message : String(err) };
           }
@@ -1152,6 +1275,89 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             saveConfig(config);
           }
           return { id, result: { removed: senderId, channel } };
+        }
+
+        case 'security.tools.get': {
+          return { id, result: {
+            global: config.security?.tools || {},
+            whatsapp: config.channels?.whatsapp?.tools || {},
+            telegram: config.channels?.telegram?.tools || {},
+          }};
+        }
+
+        case 'security.tools.set': {
+          const target = params?.target as string;  // 'global' | 'whatsapp' | 'telegram'
+          const allow = params?.allow as string[] | undefined;
+          const deny = params?.deny as string[] | undefined;
+          if (!target) return { id, error: 'target required (global, whatsapp, telegram)' };
+
+          const policy: ToolPolicyConfig = {};
+          if (allow !== undefined) policy.allow = allow;
+          if (deny !== undefined) policy.deny = deny;
+
+          if (target === 'global') {
+            if (!config.security) config.security = {};
+            config.security.tools = policy;
+          } else if (target === 'whatsapp') {
+            if (!config.channels) config.channels = {};
+            if (!config.channels.whatsapp) config.channels.whatsapp = {};
+            config.channels.whatsapp.tools = policy;
+          } else if (target === 'telegram') {
+            if (!config.channels) config.channels = {};
+            if (!config.channels.telegram) config.channels.telegram = {};
+            config.channels.telegram.tools = policy;
+          } else {
+            return { id, error: `unsupported target: ${target}` };
+          }
+          saveConfig(config);
+          broadcast({ event: 'config.update', data: { key: `security.tools.${target}`, value: policy } });
+          return { id, result: { target, policy } };
+        }
+
+        case 'security.paths.get': {
+          return { id, result: {
+            global: {
+              allowed: config.gateway?.allowedPaths || [homedir(), '/tmp'],
+              denied: config.gateway?.deniedPaths || [],
+              alwaysDenied: ALWAYS_DENIED,
+            },
+            whatsapp: {
+              allowed: config.channels?.whatsapp?.allowedPaths || [],
+              denied: config.channels?.whatsapp?.deniedPaths || [],
+            },
+            telegram: {
+              allowed: config.channels?.telegram?.allowedPaths || [],
+              denied: config.channels?.telegram?.deniedPaths || [],
+            },
+          }};
+        }
+
+        case 'security.paths.set': {
+          const target = params?.target as string;
+          const allowed = params?.allowed as string[] | undefined;
+          const denied = params?.denied as string[] | undefined;
+          if (!target) return { id, error: 'target required (global, whatsapp, telegram)' };
+
+          if (target === 'global') {
+            if (!config.gateway) config.gateway = {};
+            if (allowed !== undefined) config.gateway.allowedPaths = allowed;
+            if (denied !== undefined) config.gateway.deniedPaths = denied;
+          } else if (target === 'whatsapp') {
+            if (!config.channels) config.channels = {};
+            if (!config.channels.whatsapp) config.channels.whatsapp = {};
+            if (allowed !== undefined) config.channels.whatsapp.allowedPaths = allowed;
+            if (denied !== undefined) config.channels.whatsapp.deniedPaths = denied;
+          } else if (target === 'telegram') {
+            if (!config.channels) config.channels = {};
+            if (!config.channels.telegram) config.channels.telegram = {};
+            if (allowed !== undefined) config.channels.telegram.allowedPaths = allowed;
+            if (denied !== undefined) config.channels.telegram.deniedPaths = denied;
+          } else {
+            return { id, error: `unsupported target: ${target}` };
+          }
+          saveConfig(config);
+          broadcast({ event: 'config.update', data: { key: `security.paths.${target}`, value: { allowed, denied } } });
+          return { id, result: { target, allowed, denied } };
         }
 
         default:

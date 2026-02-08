@@ -1,4 +1,30 @@
+import type { ToolPolicyConfig } from '../config.js';
+
 export type Tier = 'auto-allow' | 'notify' | 'require-approval';
+
+export function isToolAllowed(
+  toolName: string,
+  channelPolicy?: ToolPolicyConfig,
+  globalPolicy?: ToolPolicyConfig,
+): boolean {
+  const name = cleanToolName(toolName);
+
+  // deny always wins
+  const denied = [...(channelPolicy?.deny || []), ...(globalPolicy?.deny || [])];
+  if (denied.includes(name)) return false;
+
+  // channel allow list takes precedence
+  if (channelPolicy?.allow && channelPolicy.allow.length > 0) {
+    return channelPolicy.allow.includes(name);
+  }
+
+  // global allow list
+  if (globalPolicy?.allow && globalPolicy.allow.length > 0) {
+    return globalPolicy.allow.includes(name);
+  }
+
+  return true;
+}
 
 // strip mcp__<server>__ prefix
 export function cleanToolName(name: string): string {
