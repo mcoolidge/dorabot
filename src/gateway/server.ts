@@ -17,7 +17,7 @@ import { startCronRunner, loadCronJobs, saveCronJobs, type CronRunner } from '..
 import { checkSkillEligibility, loadAllSkills } from '../skills/loader.js';
 import type { InboundMessage } from '../channels/types.js';
 import { getAllChannelStatuses } from '../channels/index.js';
-import { getChannelHandler, setSendRedirect, hasSendRedirect, clearSendRedirect } from '../tools/messaging.js';
+import { getChannelHandler } from '../tools/messaging.js';
 import { setCronRunner } from '../tools/index.js';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { classifyToolCall, cleanToolName, isToolAllowed, type Tier } from './tool-policy.js';
@@ -25,19 +25,75 @@ import { classifyToolCall, cleanToolName, isToolAllowed, type Tier } from './too
 const DEFAULT_PORT = 18789;
 const DEFAULT_HOST = 'localhost';
 
-const TOOL_PENDING_TEXT: Record<string, string> = {
-  Read: 'reading file', Write: 'writing file', Edit: 'editing file',
-  Glob: 'searching files', Grep: 'searching code', Bash: 'running command',
-  WebFetch: 'fetching url', WebSearch: 'searching web', Task: 'running task',
-  AskUserQuestion: 'asking question', TodoWrite: 'updating tasks',
-  NotebookEdit: 'editing notebook', message: 'sending message',
-  screenshot: 'taking screenshot', schedule_reminder: 'scheduling reminder',
-  schedule_recurring: 'scheduling task', schedule_cron: 'scheduling cron job',
-  list_reminders: 'listing reminders', cancel_reminder: 'cancelling reminder',
+const TOOL_EMOJI: Record<string, string> = {
+  Read: '\ud83d\udcc4', Write: '\ud83d\udcdd', Edit: '\u270f\ufe0f',
+  Glob: '\ud83d\udcc2', Grep: '\ud83d\udd0d', Bash: '\u26a1',
+  WebFetch: '\ud83c\udf10', WebSearch: '\ud83d\udd0e', Task: '\ud83e\udd16',
+  AskUserQuestion: '\ud83d\udcac', TodoWrite: '\ud83d\udcdd',
+  NotebookEdit: '\ud83d\udcd3', message: '\ud83d\udcac',
+  screenshot: '\ud83d\udcf8', browser: '\ud83c\udf10',
+  schedule_reminder: '\u23f0', schedule_recurring: '\u23f0',
+  schedule_cron: '\u23f0', list_reminders: '\u23f0', cancel_reminder: '\u23f0',
 };
 
-function toolPendingText(name: string): string {
-  return TOOL_PENDING_TEXT[name] || `running ${name}`;
+const TOOL_LABEL: Record<string, string> = {
+  Read: 'reading', Write: 'writing', Edit: 'editing',
+  Glob: 'searching files', Grep: 'searching', Bash: 'running',
+  WebFetch: 'fetching', WebSearch: 'searching', Task: 'running task',
+  AskUserQuestion: 'asking', TodoWrite: 'updating tasks',
+  NotebookEdit: 'editing notebook', message: 'sending message',
+  screenshot: 'taking screenshot', browser: 'browsing',
+  schedule_reminder: 'scheduling', schedule_recurring: 'scheduling',
+  schedule_cron: 'scheduling', list_reminders: 'listing reminders',
+  cancel_reminder: 'cancelling reminder',
+};
+
+function shortPath(p: string): string {
+  if (!p) return '';
+  const parts = p.replace(/^\/+/, '').split('/');
+  return parts.length <= 2 ? parts.join('/') : parts.slice(-2).join('/');
+}
+
+function extractToolDetail(name: string, input: Record<string, unknown>): string {
+  switch (name) {
+    case 'Read': return shortPath(String(input.file_path || ''));
+    case 'Write': return shortPath(String(input.file_path || ''));
+    case 'Edit': return shortPath(String(input.file_path || ''));
+    case 'Glob': return String(input.pattern || '').slice(0, 40);
+    case 'Grep': {
+      const pat = String(input.pattern || '').slice(0, 25);
+      const p = input.path ? shortPath(String(input.path)) : '';
+      return p ? `"${pat}" in ${p}` : `"${pat}"`;
+    }
+    case 'Bash': return String(input.command || '').split('\n')[0].slice(0, 40);
+    case 'WebFetch': {
+      try { return new URL(String(input.url || '')).hostname; } catch { return ''; }
+    }
+    case 'WebSearch': return `"${String(input.query || '').slice(0, 35)}"`;
+    case 'Task': return String(input.description || '').slice(0, 30);
+    case 'message': return String(input.channel || '');
+    case 'browser': return String(input.action || '');
+    default: return '';
+  }
+}
+
+type ToolEntry = { name: string; detail: string };
+
+function buildToolStatusText(completed: ToolEntry[], current: ToolEntry | null): string {
+  const lines: string[] = [];
+  for (const t of completed) {
+    if (t.name === 'message') continue; // skip message tool — keep it subtle
+    const emoji = TOOL_EMOJI[t.name] || '\u2705';
+    const detail = t.detail || (TOOL_LABEL[t.name] || t.name);
+    lines.push(`\u2705 ${emoji} ${detail}`);
+  }
+  if (current) {
+    const emoji = TOOL_EMOJI[current.name] || '\u23f3';
+    const label = TOOL_LABEL[current.name] || current.name;
+    const detail = current.detail ? `${label} ${current.detail}` : `${label}...`;
+    lines.push(`\u23f3 ${emoji} ${detail}`);
+  }
+  return lines.join('\n');
 }
 
 export type GatewayOptions = {
@@ -142,7 +198,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   // queued messages for sessions with active runs
   const pendingMessages = new Map<string, InboundMessage[]>();
   // accumulated tool log per active run
-  const toolLogs = new Map<string, { completed: string[]; current: string | null; lastEditAt: number }>();
+  const toolLogs = new Map<string, { completed: ToolEntry[]; current: { name: string; inputJson: string; detail: string } | null; lastEditAt: number }>();
 
   // process a channel message (or batched messages) through the agent
   async function processChannelMessage(msg: InboundMessage, batchedBodies?: string[]) {
@@ -179,10 +235,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       }
     }
 
-    // init tool log and send redirect for this run
+    // init tool log for this run
     toolLogs.set(session.key, { completed: [], current: null, lastEditAt: 0 });
-    const redirectKey = `${msg.channel}:${msg.chatId}`;
-    if (statusMsgId) setSendRedirect(redirectKey, statusMsgId);
 
     const body = batchedBodies
       ? `Multiple messages:\n${batchedBodies.map((b, i) => `${i + 1}. ${b}`).join('\n')}`
@@ -205,30 +259,29 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       sessionKey: session.key,
       source: `${msg.channel}/${msg.chatId}`,
       channel: msg.channel,
+      messageMetadata: {
+        channel: msg.channel,
+        chatId: msg.chatId,
+        chatType: msg.chatType,
+        senderName: msg.senderName,
+        body: body,
+        replyToId: msg.replyToId,
+        mediaType: msg.mediaType,
+      },
     });
 
-    // clean up typing indicator, tool log, and send redirect
+    // clean up typing indicator and tool log
     if (typingInterval) clearInterval(typingInterval);
     toolLogs.delete(session.key);
-    const statusConsumed = !!statusMsgId && !hasSendRedirect(redirectKey);
-    clearSendRedirect(redirectKey);
 
-    // edit status message with final response
-    if (handler && statusMsgId && result?.result && result.result.trim() !== 'SILENT_REPLY') {
-      if (statusConsumed) {
-        // message tool already edited the status message, nothing to do
-      } else if (result.usedMessageTool) {
-        // sent to different chat or had media, delete status
-        try { await handler.delete(statusMsgId, msg.chatId); } catch {}
-      } else {
-        try {
-          await handler.edit(statusMsgId, result.result, msg.chatId);
-        } catch {
-          try { await handler.send(msg.chatId, result.result); } catch {}
-        }
-      }
+    // delete the progress/status message, then send result as new message if needed
+    if (handler && statusMsgId) {
+      try { await handler.delete(statusMsgId, msg.chatId); } catch {}
     }
     statusMessages.delete(session.key);
+    if (handler && !result?.usedMessageTool && result?.result) {
+      try { await handler.send(msg.chatId, result.result); } catch {}
+    }
 
     // process any queued messages
     const queued = pendingMessages.get(session.key);
@@ -540,8 +593,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     source: string;
     channel?: string;
     extraContext?: string;
+    messageMetadata?: import('../session/manager.js').MessageMetadata;
   }): Promise<AgentResult | null> {
-    const { prompt, sessionKey, source, channel, extraContext } = params;
+    const { prompt, sessionKey, source, channel, extraContext, messageMetadata } = params;
     console.log(`[gateway] agent run: source=${source} sessionKey=${sessionKey} prompt="${prompt.slice(0, 80)}..."`);
 
     const prev = runQueues.get(sessionKey) || Promise.resolve();
@@ -573,6 +627,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           extraContext,
           canUseTool: makeCanUseTool(channel),
           abortController,
+          messageMetadata,
         });
 
         let agentText = '';
@@ -606,24 +661,57 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                   data: { source, sessionKey, tool: toolName, timestamp: Date.now() },
                 });
 
-                // accumulated tool log + throttled edit
                 const tl = toolLogs.get(sessionKey);
                 if (tl) {
-                  if (tl.current) tl.completed.push(tl.current);
-                  tl.current = toolName;
-
-                  const sm = statusMessages.get(sessionKey);
-                  if (sm) {
-                    const now = Date.now();
-                    if (now - tl.lastEditAt >= 2500) {
-                      tl.lastEditAt = now;
-                      const lines: string[] = [];
-                      for (const done of tl.completed) lines.push(`\u2713 ${toolPendingText(done)}`);
-                      lines.push(`\u25CB ${toolPendingText(toolName)}...`);
-                      const h = getChannelHandler(sm.channel);
-                      if (h) { try { await h.edit(sm.messageId, lines.join('\n'), sm.chatId); } catch {} }
+                  // push previous tool as completed
+                  if (tl.current) tl.completed.push({ name: tl.current.name, detail: tl.current.detail });
+                  // skip message tool from status — it's the final action, keep it subtle
+                  if (toolName === 'message') {
+                    tl.current = null;
+                  } else {
+                    tl.current = { name: toolName, inputJson: '', detail: '' };
+                    // throttled status edit
+                    const sm = statusMessages.get(sessionKey);
+                    if (sm) {
+                      const now = Date.now();
+                      if (now - tl.lastEditAt >= 2500) {
+                        tl.lastEditAt = now;
+                        const text = buildToolStatusText(tl.completed, tl.current);
+                        const h = getChannelHandler(sm.channel);
+                        if (h) { try { await h.edit(sm.messageId, text, sm.chatId); } catch {} }
+                      }
                     }
                   }
+                }
+              }
+            }
+
+            // accumulate tool input json
+            if (event.type === 'content_block_delta') {
+              const delta = event.delta as Record<string, unknown>;
+              if (delta?.type === 'input_json_delta') {
+                const tl = toolLogs.get(sessionKey);
+                if (tl?.current) {
+                  tl.current.inputJson += String(delta.partial_json || '');
+                }
+              }
+            }
+
+            // tool input complete — extract detail and force update (no throttle)
+            if (event.type === 'content_block_stop') {
+              const tl = toolLogs.get(sessionKey);
+              if (tl?.current && tl.current.inputJson) {
+                try {
+                  const input = JSON.parse(tl.current.inputJson);
+                  tl.current.detail = extractToolDetail(tl.current.name, input);
+                } catch {}
+                // force edit — detail is worth showing immediately
+                const sm = statusMessages.get(sessionKey);
+                if (sm) {
+                  tl.lastEditAt = Date.now();
+                  const text = buildToolStatusText(tl.completed, tl.current);
+                  const h = getChannelHandler(sm.channel);
+                  if (h) { try { await h.edit(sm.messageId, text, sm.chatId); } catch {} }
                 }
               }
             }
