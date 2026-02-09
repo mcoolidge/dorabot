@@ -2,8 +2,6 @@
 
 Your personal AI agent that lives on WhatsApp, Telegram, and a desktop app. It can browse the web, send messages, manage files, run code, and handle scheduled tasks — all with persistent memory across conversations.
 
-Built on the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk).
-
 ## What Can It Do?
 
 - **Chat anywhere** — Talk to the same agent on WhatsApp, Telegram, or the desktop app. It remembers everything across channels.
