@@ -221,6 +221,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const pendingMessages = new Map<string, InboundMessage[]>();
   // accumulated tool log per active run
   const toolLogs = new Map<string, { completed: ToolEntry[]; current: { name: string; inputJson: string; detail: string } | null; lastEditAt: number }>();
+  // guard against overlapping WhatsApp login attempts
+  let whatsappLoginInProgress = false;
 
   // process a channel message (or batched messages) through the agent
   async function processChannelMessage(msg: InboundMessage, batchedBodies?: string[]) {
@@ -1082,39 +1084,47 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
         case 'channels.whatsapp.login': {
           const authDir = config.channels?.whatsapp?.authDir || getDefaultAuthDir();
+          if (whatsappLoginInProgress) {
+            return { id, result: { success: true, started: true, inProgress: true } };
+          }
+
+          whatsappLoginInProgress = true;
           broadcast({ event: 'whatsapp.login_status', data: { status: 'connecting' } });
 
-          try {
-            const result = await loginWhatsApp(authDir, (qr) => {
-              broadcast({ event: 'whatsapp.qr', data: { qr } });
-              broadcast({ event: 'whatsapp.login_status', data: { status: 'qr_ready' } });
-            });
+          void (async () => {
+            try {
+              const result = await loginWhatsApp(authDir, (qr) => {
+                broadcast({ event: 'whatsapp.qr', data: { qr } });
+                broadcast({ event: 'whatsapp.login_status', data: { status: 'qr_ready' } });
+              });
 
-            if (result.success) {
-              // auto-enable whatsapp in config
-              if (!config.channels) config.channels = {};
-              if (!config.channels.whatsapp) config.channels.whatsapp = {};
-              config.channels.whatsapp.enabled = true;
-              saveConfig(config);
+              if (result.success) {
+                // auto-enable whatsapp in config
+                if (!config.channels) config.channels = {};
+                if (!config.channels.whatsapp) config.channels.whatsapp = {};
+                config.channels.whatsapp.enabled = true;
+                saveConfig(config);
 
-              broadcast({ event: 'whatsapp.login_status', data: { status: 'connected' } });
+                broadcast({ event: 'whatsapp.login_status', data: { status: 'connected' } });
 
-              // auto-start the monitor
-              await channelManager.startChannel('whatsapp');
-
-              return { id, result: { success: true, selfJid: result.selfJid } };
-            } else {
-              broadcast({ event: 'whatsapp.login_status', data: { status: 'failed', error: result.error } });
-              return { id, result: { success: false, error: result.error } };
+                // auto-start the monitor
+                await channelManager.startChannel('whatsapp');
+              } else {
+                broadcast({ event: 'whatsapp.login_status', data: { status: 'failed', error: result.error } });
+              }
+            } catch (err) {
+              const error = err instanceof Error ? err.message : String(err);
+              broadcast({ event: 'whatsapp.login_status', data: { status: 'failed', error } });
+            } finally {
+              whatsappLoginInProgress = false;
             }
-          } catch (err) {
-            const error = err instanceof Error ? err.message : String(err);
-            broadcast({ event: 'whatsapp.login_status', data: { status: 'failed', error } });
-            return { id, error };
-          }
+          })();
+
+          return { id, result: { success: true, started: true } };
         }
 
         case 'channels.whatsapp.logout': {
+          whatsappLoginInProgress = false;
           await channelManager.stopChannel('whatsapp');
           const authDir = config.channels?.whatsapp?.authDir || getDefaultAuthDir();
           await logoutWhatsApp(authDir);

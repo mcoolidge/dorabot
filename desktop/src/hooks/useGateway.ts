@@ -216,6 +216,7 @@ export function useGateway(url = 'ws://localhost:18789') {
   const [notifications, setNotifications] = useState<ToolNotification[]>([]);
   const [whatsappQr, setWhatsappQr] = useState<string | null>(null);
   const [whatsappLoginStatus, setWhatsappLoginStatus] = useState<string>('unknown');
+  const [whatsappLoginError, setWhatsappLoginError] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const rpcIdRef = useRef(0);
@@ -225,7 +226,7 @@ export function useGateway(url = 'ws://localhost:18789') {
   // track which session key we're viewing - only show stream events for this key
   const activeSessionKeyRef = useRef<string>('desktop:dm:default');
 
-  const rpc = useCallback(async (method: string, params?: Record<string, unknown>): Promise<unknown> => {
+  const rpc = useCallback(async (method: string, params?: Record<string, unknown>, timeoutMs = 30000): Promise<unknown> => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       throw new Error('Not connected to gateway');
@@ -236,13 +237,13 @@ export function useGateway(url = 'ws://localhost:18789') {
       pendingRpcRef.current.set(id, { resolve, reject });
       ws.send(JSON.stringify({ method, params, id }));
 
-      // timeout after 30s
+      // timeout after default 30s unless caller overrides
       setTimeout(() => {
         if (pendingRpcRef.current.has(id)) {
           pendingRpcRef.current.delete(id);
           reject(new Error(`RPC timeout: ${method}`));
         }
-      }, 30000);
+      }, timeoutMs);
     });
   }, []);
 
@@ -489,6 +490,14 @@ export function useGateway(url = 'ws://localhost:18789') {
       case 'whatsapp.login_status': {
         const d = data as { status: string; error?: string };
         setWhatsappLoginStatus(d.status);
+        if (d.status === 'failed') {
+          setWhatsappLoginError(d.error || 'WhatsApp login failed');
+          setWhatsappQr(null);
+          break;
+        }
+        if (d.status === 'connecting' || d.status === 'qr_ready' || d.status === 'connected' || d.status === 'disconnected' || d.status === 'not_linked') {
+          setWhatsappLoginError(null);
+        }
         if (d.status === 'connected' || d.status === 'failed' || d.status === 'disconnected') {
           setWhatsappQr(null);
         }
@@ -781,19 +790,22 @@ export function useGateway(url = 'ws://localhost:18789') {
   const whatsappCheckStatus = useCallback(async () => {
     const res = await rpc('channels.whatsapp.status') as { linked: boolean };
     setWhatsappLoginStatus(res.linked ? 'connected' : 'not_linked');
+    if (!res.linked) setWhatsappLoginError(null);
     return res;
   }, [rpc]);
 
   const whatsappLogin = useCallback(async () => {
     setWhatsappLoginStatus('connecting');
     setWhatsappQr(null);
-    return await rpc('channels.whatsapp.login') as { success: boolean; selfJid?: string; error?: string };
+    setWhatsappLoginError(null);
+    return await rpc('channels.whatsapp.login', undefined, 10000) as { success: boolean; started?: boolean; inProgress?: boolean; selfJid?: string; error?: string };
   }, [rpc]);
 
   const whatsappLogout = useCallback(async () => {
     await rpc('channels.whatsapp.logout');
     setWhatsappLoginStatus('not_linked');
     setWhatsappQr(null);
+    setWhatsappLoginError(null);
   }, [rpc]);
 
   return {
@@ -835,6 +847,7 @@ export function useGateway(url = 'ws://localhost:18789') {
     setPathPolicy,
     whatsappQr,
     whatsappLoginStatus,
+    whatsappLoginError,
     whatsappCheckStatus,
     whatsappLogin,
     whatsappLogout,

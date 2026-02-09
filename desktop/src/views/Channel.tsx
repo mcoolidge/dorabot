@@ -17,30 +17,31 @@ type Props = {
 };
 
 function WhatsAppSetup({ gateway }: { gateway: ReturnType<typeof useGateway> }) {
-  const [error, setError] = useState<string | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
   const loginStatus = gateway.whatsappLoginStatus;
   const qr = gateway.whatsappQr;
+  const error = localError || gateway.whatsappLoginError;
 
   useEffect(() => {
     gateway.whatsappCheckStatus().catch(() => {});
-  }, []);
+  }, [gateway.whatsappCheckStatus]);
 
   const handleLogin = async () => {
-    setError(null);
+    setLocalError(null);
     try {
       const res = await gateway.whatsappLogin();
-      if (!res.success) setError(res.error || 'login failed');
+      if (!res.success) setLocalError(res.error || 'login failed');
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setLocalError(err instanceof Error ? err.message : String(err));
     }
   };
 
   const handleLogout = async () => {
-    setError(null);
+    setLocalError(null);
     try {
       await gateway.whatsappLogout();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setLocalError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -85,11 +86,19 @@ function WhatsAppSetup({ gateway }: { gateway: ReturnType<typeof useGateway> }) 
                     open WhatsApp → settings → linked devices → link a device
                   </div>
                 </div>
+                {error && (
+                  <div className="text-[11px] text-destructive text-center">{error}</div>
+                )}
               </>
             ) : (
-              <div className="flex items-center gap-2 py-8">
-                <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-                <span className="text-xs text-muted-foreground">connecting to WhatsApp...</span>
+              <div className="flex flex-col items-center gap-2 py-8">
+                <div className="flex items-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                  <span className="text-xs text-muted-foreground">connecting to WhatsApp...</span>
+                </div>
+                {error && (
+                  <div className="text-[11px] text-destructive text-center">{error}</div>
+                )}
               </div>
             )}
           </div>

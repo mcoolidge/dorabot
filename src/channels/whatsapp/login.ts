@@ -1,7 +1,9 @@
 import { mkdirSync, existsSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { createWaSocket, waitForConnection, getDefaultAuthDir, isAuthenticated } from './session.js';
 
 export type LoginResult = { success: boolean; error?: string; selfJid?: string };
+const DEFAULT_LOGIN_TIMEOUT_MS = 180000;
 
 export async function loginWhatsApp(authDir?: string, onQr?: (qr: string) => void): Promise<LoginResult> {
   const dir = authDir || getDefaultAuthDir();
@@ -9,10 +11,25 @@ export async function loginWhatsApp(authDir?: string, onQr?: (qr: string) => voi
 
   console.log('Connecting to WhatsApp... scan QR code when it appears.');
 
+  const credsPath = join(dir, 'creds.json');
+  if (existsSync(credsPath) && !isAuthenticated(dir)) {
+    console.warn('Found stale WhatsApp auth state. Resetting auth files before login.');
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+  }
+
+  const envTimeout = Number(process.env.WHATSAPP_LOGIN_TIMEOUT_MS);
+  const loginTimeoutMs = Number.isFinite(envTimeout) && envTimeout > 0
+    ? envTimeout
+    : DEFAULT_LOGIN_TIMEOUT_MS;
+
+  let qrSeen = false;
+
   try {
     const sock = await createWaSocket({
       authDir: dir,
       onQr: (qr) => {
+        qrSeen = true;
         if (onQr) {
           onQr(qr);
         } else {
@@ -33,7 +50,7 @@ export async function loginWhatsApp(authDir?: string, onQr?: (qr: string) => voi
       },
     });
 
-    await waitForConnection(sock);
+    await waitForConnection(sock, loginTimeoutMs);
 
     const selfJid = (sock as any).authState?.creds?.me?.id;
     console.log(`Logged in as: ${selfJid || 'unknown'}`);
@@ -43,7 +60,10 @@ export async function loginWhatsApp(authDir?: string, onQr?: (qr: string) => voi
 
     return { success: true, selfJid };
   } catch (err) {
-    const error = err instanceof Error ? err.message : String(err);
+    let error = err instanceof Error ? err.message : String(err);
+    if (error.includes('timed out') && !qrSeen) {
+      error += '. QR was not generated. Check internet/firewall access to WhatsApp Web and retry.';
+    }
     return { success: false, error };
   }
 }
