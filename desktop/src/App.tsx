@@ -109,7 +109,7 @@ export default function App() {
 
       {/* titlebar — pure drag chrome */}
       <div className="h-11 bg-card border-b border-border flex items-center pl-[78px] pr-4 shrink-0" style={{ WebkitAppRegion: 'drag' } as any}>
-        <img src="/dorabot.png" alt="dorabot" className="w-10 h-10 mr-1" />
+        <img src="/dorabot.png" alt="dorabot" className="w-10 h-10 mr-1 dorabot-alive" />
         <span className="text-base text-muted-foreground font-medium">dorabot</span>
       </div>
 

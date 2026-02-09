@@ -370,7 +370,10 @@ export function ChatView({ gateway }: Props) {
             <div className="w-full max-w-2xl px-6 space-y-6">
               {/* greeting */}
               <div className="text-center space-y-2">
-                <img src="/dorabot-computer.png" alt="dorabot" className="w-24 h-24 mx-auto dorabot-alive" />
+                <div className="relative w-24 h-24 mx-auto">
+                  <div className="absolute inset-0 rounded-full bg-success/30 blur-xl animate-pulse" />
+                  <img src="/dorabot-computer.png" alt="dorabot" className="relative w-24 h-24 dorabot-alive" />
+                </div>
                 <h1 className="text-lg font-semibold text-foreground">{getGreeting()}</h1>
                 <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
                   <div className={cn('w-1.5 h-1.5 rounded-full', connected ? 'bg-success' : 'bg-destructive')} />
