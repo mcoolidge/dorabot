@@ -786,7 +786,7 @@ export async function browserFill(uid: string, value: string, includeSnapshot?: 
 
     // Check if this is a combobox/select via the a11y node (like Chrome DevTools MCP does)
     const refEntry = getRefEntry(uid);
-    const isCombobox = refEntry?.axNode?.role === 'combobox';
+    const isCombobox = refEntry?.role === 'combobox';
 
     await waitForEventsAfterAction(page, async () => {
       if (isCombobox) {
@@ -827,7 +827,7 @@ export async function browserFillForm(
     try {
       const locator = resolveUid(element.uid);
       const refEntry = getRefEntry(element.uid);
-      const isCombobox = refEntry?.axNode?.role === 'combobox';
+      const isCombobox = refEntry?.role === 'combobox';
 
       await waitForEventsAfterAction(page, async () => {
         if (isCombobox) {

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, type KeyboardEvent } from 'react';
 import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { useGateway, ChatItem, AskUserQuestion } from '../hooks/useGateway';
 import { ApprovalUI } from '@/components/approval-ui';
 import { ToolUI } from '@/components/tool-ui';
