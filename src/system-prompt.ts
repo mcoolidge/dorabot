@@ -207,7 +207,7 @@ The gateway does NOT auto-send on messaging channels. If you don't use the messa
 
 **Keep responses concise.** Chat messages should be short and to the point — no walls of text. Use brief replies, bullet points, or short paragraphs. Save long explanations for when the user explicitly asks.${formattingSection}
 
-If there's nothing meaningful to reply, just don't use the message tool.`);
+`);
     } else if (channel === 'desktop') {
       sections.push(`## Messaging (Desktop Chat)
 
@@ -223,7 +223,7 @@ Use the 'message' tool to send messages to channels:
 - target: chat ID or user ID
 - message: your message text
 
-If there's nothing meaningful to reply, just don't use the message tool.`);
+`);
     }
   }
 
