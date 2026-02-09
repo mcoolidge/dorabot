@@ -66,31 +66,85 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
 };
 
 function ToolUseItem({ item }: { item: Extract<ChatItem, { type: 'tool_use' }> }) {
-  const [open, setOpen] = useState(false);
+  const [manualOpen, setManualOpen] = useState<boolean | null>(null);
   const hasOutput = item.output != null;
   const isPending = item.streaming || !hasOutput;
   const displayName = toolText(item.name, isPending ? 'pending' : 'done');
   const useStreamCard = hasStreamCard(item.name);
 
-  // stream card: full visual component, always visible
+  // auto-collapse when done streaming, but let user override
+  const isOpen = manualOpen !== null ? manualOpen : isPending;
+
+  const inputDetail = (() => {
+    try {
+      const p = JSON.parse(item.input);
+      return p.command?.split('\n')[0] || p.file_path || p.pattern || p.url || p.query || p.description || '';
+    } catch { return item.input.slice(0, 80); }
+  })();
+
+  // screenshot: show image inline after collapse
+  const isScreenshot = item.name === 'screenshot';
+  const screenshotSrc = isScreenshot
+    ? (item.imageData || (item.output && item.output.startsWith('data:') ? item.output : undefined))
+    : undefined;
+
   if (useStreamCard) {
     return (
       <div className="max-w-md">
-        <ToolStreamCard
-          name={item.name}
-          input={item.input}
-          output={item.output}
-          imageData={item.imageData}
-          isError={item.is_error}
-          streaming={item.streaming}
-        />
+        <Collapsible open={isOpen} onOpenChange={v => setManualOpen(v)}>
+          {/* collapsed header — only visible when collapsed */}
+          {!isOpen && (
+            <CollapsibleTrigger className="flex items-center gap-2 w-full px-3 py-1.5 text-xs hover:bg-secondary/50 transition-colors rounded-md border border-border/40">
+              {(() => {
+                const Icon = TOOL_ICONS[item.name] || Wrench;
+                return <Icon className={item.is_error ? 'w-3 h-3 text-destructive' : 'w-3 h-3 text-muted-foreground'} />;
+              })()}
+              <span className="text-muted-foreground font-medium">{displayName}</span>
+              <span className="text-muted-foreground/60 flex-1 truncate text-left text-[11px]">{inputDetail}</span>
+              <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />
+            </CollapsibleTrigger>
+          )}
+          <CollapsibleContent forceMount={isOpen ? true : undefined}>
+            {isOpen && (
+              <div className="relative">
+                {/* clickable overlay to collapse when done */}
+                {!isPending && (
+                  <button
+                    className="absolute top-1 right-1 z-10 p-0.5 rounded bg-background/80 hover:bg-secondary text-muted-foreground"
+                    onClick={() => setManualOpen(false)}
+                    title="collapse"
+                  >
+                    <ChevronDown className="w-3 h-3" />
+                  </button>
+                )}
+                <ToolStreamCard
+                  name={item.name}
+                  input={item.input}
+                  output={item.output}
+                  imageData={item.imageData}
+                  isError={item.is_error}
+                  streaming={item.streaming}
+                />
+              </div>
+            )}
+          </CollapsibleContent>
+        </Collapsible>
+        {/* screenshot: show image inline in chat after card collapses */}
+        {isScreenshot && !isOpen && screenshotSrc && (
+          <img
+            src={screenshotSrc}
+            alt="screenshot"
+            className="mt-1.5 rounded-md border border-border/40 w-full cursor-pointer hover:opacity-90 transition-opacity"
+            onClick={() => setManualOpen(true)}
+          />
+        )}
       </div>
     );
   }
 
   // fallback: old collapsible style for unmapped tools
   return (
-    <Collapsible open={open} onOpenChange={setOpen}>
+    <Collapsible open={isOpen} onOpenChange={v => setManualOpen(v)}>
       <Card className="my-1 overflow-hidden border-border/50 max-w-md">
         <CollapsibleTrigger className="flex items-center gap-2 w-full px-3 py-1.5 text-xs hover:bg-secondary/50 transition-colors">
           {(() => {
@@ -100,15 +154,8 @@ function ToolUseItem({ item }: { item: Extract<ChatItem, { type: 'tool_use' }> }
             return <Icon className="w-3 h-3 text-muted-foreground" />;
           })()}
           <span className="text-warning font-semibold">{displayName}</span>
-          <span className="text-muted-foreground flex-1 truncate text-left">
-            {(() => {
-              try {
-                const p = JSON.parse(item.input);
-                return p.command || p.file_path || p.pattern || p.url || p.query || p.description || '';
-              } catch { return item.input.slice(0, 80); }
-            })()}
-          </span>
-          {open ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" /> : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
+          <span className="text-muted-foreground flex-1 truncate text-left">{inputDetail}</span>
+          {isOpen ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" /> : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
         </CollapsibleTrigger>
         <CollapsibleContent>
           <div className="border-t border-border/50 px-3 py-2 bg-background">
