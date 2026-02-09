@@ -223,7 +223,7 @@ Use the 'message' tool to send messages to channels:
 - target: chat ID or user ID
 - message: your message text
 
-`);
+**Keep responses concise on Telegram and WhatsApp.** Chat messages should be short and to the point — no walls of text. Use brief replies, bullet points, or short paragraphs. Save long explanations for when the user explicitly asks.`);
     }
   }
 
