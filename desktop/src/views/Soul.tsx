@@ -37,7 +37,7 @@ const SETUP_PROMPTS: Record<string, string> = {
 export function SoulView({ gateway, onSetupChat }: Props) {
   const disabled = gateway.connectionState !== 'connected';
   const [files, setFiles] = useState<Record<string, FileState>>({});
-  const [activeFile, setActiveFile] = useState(FILES[0].name);
+  const [activeFile, setActiveFile] = useState<(typeof FILES)[number]['name']>(FILES[0].name);
   const [editing, setEditing] = useState(false);
 
   const loadFile = useCallback(async (name: string) => {
@@ -172,8 +172,8 @@ export function SoulView({ gateway, onSetupChat }: Props) {
             loading...
           </div>
         ) : editing ? (
-          <ResizablePanelGroup direction="horizontal">
-            <ResizablePanel defaultSize={50} minSize={30}>
+          <ResizablePanelGroup orientation="horizontal">
+            <ResizablePanel defaultSize="50%" minSize="30%">
               <Textarea
                 value={file?.content || ''}
                 onChange={e => setFiles(prev => ({
@@ -186,7 +186,7 @@ export function SoulView({ gateway, onSetupChat }: Props) {
               />
             </ResizablePanel>
             <ResizableHandle />
-            <ResizablePanel defaultSize={50} minSize={20}>
+            <ResizablePanel defaultSize="50%" minSize="20%">
               <ScrollArea className="h-full">
                 <div className="markdown-viewer p-4 text-[12px]">
                   <ReactMarkdown>{file?.content || ''}</ReactMarkdown>

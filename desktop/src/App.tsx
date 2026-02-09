@@ -108,9 +108,9 @@ export default function App() {
       </div>
 
       {/* main layout */}
-      <ResizablePanelGroup direction="horizontal" className="flex-1 min-h-0">
+      <ResizablePanelGroup orientation="horizontal" className="flex-1 min-h-0">
         {/* sidebar */}
-        <ResizablePanel defaultSize={15} minSize={10} maxSize={25} className="bg-card overflow-hidden">
+        <ResizablePanel defaultSize="15%" minSize="10%" maxSize="25%" className="bg-card overflow-hidden">
           <div className="flex flex-col h-full min-h-0">
             <div className="shrink-0 p-2">
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground px-2.5 pt-3 pb-1">views</div>
@@ -211,7 +211,7 @@ export default function App() {
         <ResizableHandle withHandle />
 
         {/* main content */}
-        <ResizablePanel defaultSize={showFiles ? 55 : 85} minSize={30} className="overflow-hidden">
+        <ResizablePanel defaultSize={showFiles ? "55%" : "85%"} minSize="30%" className="overflow-hidden">
           <div className="flex flex-col h-full min-h-0">
             {renderView()}
           </div>
@@ -221,7 +221,7 @@ export default function App() {
         {showFiles && (
           <>
             <ResizableHandle withHandle />
-            <ResizablePanel defaultSize={30} minSize={15} maxSize={45} className="overflow-hidden">
+            <ResizablePanel defaultSize="30%" minSize="15%" maxSize="45%" className="overflow-hidden">
               <FileExplorer
                 rpc={gw.rpc}
                 connected={gw.connectionState === 'connected'}
