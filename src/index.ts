@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import 'dotenv/config';
 import { parseArgs } from 'node:util';
 import { createInterface } from 'node:readline';
 import { loadConfig } from './config.js';

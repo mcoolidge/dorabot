@@ -54,7 +54,7 @@ function ToolUseItem({ item }: { item: Extract<ChatItem, { type: 'tool_use' }> }
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <Card className="my-1 overflow-hidden border-border/50">
+      <Card className="my-1 overflow-hidden border-border/50 max-w-md">
         <CollapsibleTrigger className="flex items-center gap-2 w-full px-3 py-1.5 text-xs hover:bg-secondary/50 transition-colors">
           {item.streaming ? (
             <div className="w-3 h-3 rounded-full border-2 border-primary border-t-transparent animate-spin" />
