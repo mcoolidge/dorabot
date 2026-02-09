@@ -3,6 +3,7 @@ import { CodeViewer } from './viewers/CodeViewer';
 import { MarkdownViewer } from './viewers/MarkdownViewer';
 import { PDFViewer } from './viewers/PDFViewer';
 import { ExcelViewer } from './viewers/ExcelViewer';
+import { ImageViewer } from './viewers/ImageViewer';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { X } from 'lucide-react';
@@ -13,7 +14,7 @@ type Props = {
   onClose: () => void;
 };
 
-type FileType = 'code' | 'markdown' | 'pdf' | 'excel' | 'unsupported';
+type FileType = 'code' | 'markdown' | 'pdf' | 'excel' | 'image' | 'unsupported';
 
 const CODE_EXTENSIONS = [
   'js', 'jsx', 'ts', 'tsx', 'py', 'rs', 'go', 'java', 'c', 'cpp', 'h', 'hpp',
@@ -22,6 +23,7 @@ const CODE_EXTENSIONS = [
 ];
 
 const EXCEL_EXTENSIONS = ['xlsx', 'xls', 'csv'];
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'];
 
 function getFileType(path: string): FileType {
   const ext = path.split('.').pop()?.toLowerCase();
@@ -29,6 +31,7 @@ function getFileType(path: string): FileType {
   if (ext === 'md') return 'markdown';
   if (ext === 'pdf') return 'pdf';
   if (EXCEL_EXTENSIONS.includes(ext)) return 'excel';
+  if (IMAGE_EXTENSIONS.includes(ext)) return 'image';
   if (CODE_EXTENSIONS.includes(ext)) return 'code';
   return 'unsupported';
 }
@@ -51,7 +54,7 @@ export function FileViewer({ filePath, rpc, onClose }: Props) {
       return;
     }
 
-    if (fileType === 'pdf' || fileType === 'excel') {
+    if (fileType === 'pdf' || fileType === 'excel' || fileType === 'image') {
       setLoading(false);
       return;
     }
@@ -96,6 +99,8 @@ export function FileViewer({ filePath, rpc, onClose }: Props) {
         return <PDFViewer filePath={filePath} rpc={rpc} />;
       case 'excel':
         return <ExcelViewer filePath={filePath} rpc={rpc} />;
+      case 'image':
+        return <ImageViewer filePath={filePath} rpc={rpc} />;
       default:
         return <div className="p-4 text-muted-foreground text-xs">Unsupported file type</div>;
     }
