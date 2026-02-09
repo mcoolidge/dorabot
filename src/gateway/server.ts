@@ -14,7 +14,7 @@ import { SessionManager } from '../session/manager.js';
 import { streamAgent, type AgentResult } from '../agent.js';
 import { startHeartbeatRunner, type HeartbeatRunner } from '../heartbeat/runner.js';
 import { startCronRunner, loadCronJobs, saveCronJobs, type CronRunner } from '../cron/scheduler.js';
-import { checkSkillEligibility, loadAllSkills } from '../skills/loader.js';
+import { checkSkillEligibility, loadAllSkills, findSkillByName } from '../skills/loader.js';
 import type { InboundMessage } from '../channels/types.js';
 import { getAllChannelStatuses } from '../channels/index.js';
 import { loginWhatsApp, logoutWhatsApp, isWhatsAppLinked } from '../channels/whatsapp/login.js';
@@ -1194,6 +1194,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         }
 
         case 'skills.list': {
+          const userSkillsDir = resolve(join('~', '.dorabot', 'skills'));
           const allSkills = loadAllSkills(config);
           const result = allSkills.map(skill => ({
             name: skill.name,
@@ -1202,8 +1203,88 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             userInvocable: skill.userInvocable,
             metadata: skill.metadata,
             eligibility: checkSkillEligibility(skill, config),
+            builtIn: !skill.path.startsWith(userSkillsDir),
           }));
           return { id, result };
+        }
+
+        case 'skills.read': {
+          const name = params?.name as string;
+          if (!name) return { id, error: 'name required' };
+          const skill = findSkillByName(name, config);
+          if (!skill) return { id, error: `skill not found: ${name}` };
+          try {
+            const raw = readFileSync(skill.path, 'utf-8');
+            return { id, result: { name: skill.name, path: skill.path, raw } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'skills.create': {
+          const name = params?.name as string;
+          const description = params?.description as string || '';
+          const content = params?.content as string || '';
+          const userInvocable = params?.userInvocable !== false;
+          const metadata = params?.metadata as Record<string, unknown> | undefined;
+
+          if (!name) return { id, error: 'name required' };
+          if (/[\/\\]/.test(name)) return { id, error: 'name cannot contain slashes' };
+
+          const skillDir = resolve(join('~', '.dorabot', 'skills', name));
+          const skillPath = join(skillDir, 'SKILL.md');
+
+          // build frontmatter
+          const fm: Record<string, unknown> = { name, description };
+          if (!userInvocable) fm['user-invocable'] = false;
+          if (metadata?.requires) fm.metadata = { requires: metadata.requires };
+
+          const yamlLines = ['---'];
+          yamlLines.push(`name: ${fm.name}`);
+          yamlLines.push(`description: "${(fm.description as string).replace(/"/g, '\\"')}"`);
+          if (fm['user-invocable'] === false) yamlLines.push('user-invocable: false');
+          if (fm.metadata) {
+            const req = (fm.metadata as any).requires;
+            if (req) {
+              yamlLines.push('metadata:');
+              yamlLines.push('  requires:');
+              if (req.bins?.length) yamlLines.push(`    bins: [${req.bins.map((b: string) => `'${b}'`).join(', ')}]`);
+              if (req.env?.length) yamlLines.push(`    env: [${req.env.map((e: string) => `'${e}'`).join(', ')}]`);
+            }
+          }
+          yamlLines.push('---');
+          yamlLines.push('');
+
+          const fileContent = yamlLines.join('\n') + content;
+
+          try {
+            mkdirSync(skillDir, { recursive: true });
+            writeFileSync(skillPath, fileContent, 'utf-8');
+            return { id, result: { name, path: skillPath } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
+        }
+
+        case 'skills.delete': {
+          const name = params?.name as string;
+          if (!name) return { id, error: 'name required' };
+
+          const skill = findSkillByName(name, config);
+          if (!skill) return { id, error: `skill not found: ${name}` };
+
+          const userSkillsDir = resolve(join('~', '.dorabot', 'skills'));
+          if (!skill.path.startsWith(userSkillsDir)) {
+            return { id, error: 'cannot delete built-in skills' };
+          }
+
+          try {
+            const skillDir = resolve(join('~', '.dorabot', 'skills', name));
+            rmSync(skillDir, { recursive: true, force: true });
+            return { id, result: { deleted: name } };
+          } catch (err) {
+            return { id, error: err instanceof Error ? err.message : String(err) };
+          }
         }
 
         case 'config.get': {

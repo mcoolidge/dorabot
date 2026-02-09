@@ -117,7 +117,7 @@ Config lives at `~/.dorabot/config.json` (or `./dorabot.config.json` locally).
 
 ## Tech Stack
 
-Node.js, TypeScript, Claude Agent SDK, Electron, React, Playwright, Baileys, grammy
+Node.js, TypeScript, Electron, React, Playwright, Baileys, grammy
 
 ## License
 

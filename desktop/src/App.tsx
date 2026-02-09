@@ -8,6 +8,7 @@ import { Progress } from './components/Progress';
 import { FileViewer } from './components/FileViewer';
 import { SettingsView } from './views/Settings';
 import { SoulView } from './views/Soul';
+import { SkillsView } from './views/Skills';
 import { Toaster, toast } from 'sonner';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
@@ -15,16 +16,17 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import {
   MessageSquare, Radio, Zap, Brain, Settings2,
-  FolderOpen
+  FolderOpen, Sparkles
 } from 'lucide-react';
 
-type NavTab = 'chat' | 'channels' | 'automation' | 'memory' | 'settings';
+type NavTab = 'chat' | 'channels' | 'automation' | 'skills' | 'memory' | 'settings';
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
 
 const NAV_ITEMS: { id: NavTab; label: string; icon: React.ReactNode }[] = [
   { id: 'chat', label: 'Task', icon: <MessageSquare className="w-3.5 h-3.5" /> },
   { id: 'channels', label: 'Channels', icon: <Radio className="w-3.5 h-3.5" /> },
   { id: 'automation', label: 'Automations', icon: <Zap className="w-3.5 h-3.5" /> },
+  { id: 'skills', label: 'Skills', icon: <Sparkles className="w-3.5 h-3.5" /> },
   { id: 'memory', label: 'Memory', icon: <Brain className="w-3.5 h-3.5" /> },
   { id: 'settings', label: 'Settings', icon: <Settings2 className="w-3.5 h-3.5" /> },
 ];
@@ -74,6 +76,8 @@ export default function App() {
         return <ChannelView channel={selectedChannel} gateway={gw} onViewSession={handleViewSession} onSwitchChannel={setSelectedChannel} />;
       case 'automation':
         return <Automations gateway={gw} />;
+      case 'skills':
+        return <SkillsView gateway={gw} />;
       case 'memory':
         return <SoulView gateway={gw} onSetupChat={(prompt) => { gw.sendMessage(prompt); setActiveTab('chat'); }} />;
       case 'settings':
