@@ -15,25 +15,94 @@ type Props = {
 
 export function ProviderSetup({ provider, gateway, onSuccess, onBack, compact, preferredMethod }: Props) {
   if (provider === 'claude') {
-    return <ClaudeSetup gateway={gateway} onSuccess={onSuccess} onBack={onBack} compact={compact} />;
+    return <ClaudeSetup gateway={gateway} onSuccess={onSuccess} onBack={onBack} compact={compact} preferredMethod={preferredMethod} />;
   }
   return <CodexSetup gateway={gateway} onSuccess={onSuccess} onBack={onBack} compact={compact} preferredMethod={preferredMethod} />;
 }
 
-function ClaudeSetup({ gateway, onSuccess, onBack, compact }: Omit<Props, 'provider' | 'preferredMethod'>) {
+type ClaudeProps = Omit<Props, 'provider'> & { preferredMethod?: 'oauth' | 'apikey' };
+
+function ClaudeSetup({ gateway, onSuccess, onBack, compact, preferredMethod }: ClaudeProps) {
+  const [mode, setMode] = useState<'choose' | 'oauth-waiting' | 'apikey' | 'not-installed'>(
+    preferredMethod === 'apikey' ? 'apikey' : 'choose'
+  );
   const [apiKey, setApiKey] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const loginIdRef = useRef<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoStartedRef = useRef(false);
 
   useEffect(() => {
-    inputRef.current?.focus();
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
   }, []);
 
-  const isValid = apiKey.startsWith('sk-ant-') && apiKey.length > 20;
+  // Auto-start OAuth detection if preferredMethod is 'oauth'
+  useEffect(() => {
+    if (preferredMethod === 'oauth' && !autoStartedRef.current) {
+      autoStartedRef.current = true;
+      startSetupToken();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preferredMethod]);
 
-  const submit = useCallback(async () => {
-    if (!isValid) return;
+  const startSetupToken = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      // Check if Claude CLI is installed
+      const check = await gateway.checkProvider('claude');
+      if (!check.ready && check.reason?.includes('CLI not found')) {
+        setMode('not-installed');
+        setLoading(false);
+        return;
+      }
+
+      const { authUrl, loginId } = await gateway.startOAuth('claude');
+      loginIdRef.current = loginId;
+      setMode('oauth-waiting');
+
+      // Open browser if a real URL was captured
+      if (authUrl && !authUrl.startsWith('claude://')) {
+        (window as any).electronAPI?.openExternal?.(authUrl) || window.open(authUrl, '_blank');
+      }
+
+      // Poll for completion
+      pollRef.current = setInterval(async () => {
+        try {
+          const res = await gateway.completeOAuth('claude', loginId);
+          if (res.authenticated) {
+            if (pollRef.current) clearInterval(pollRef.current);
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            pollRef.current = null;
+            setLoading(false);
+            onSuccess();
+          }
+        } catch {
+          // still waiting
+        }
+      }, 2000);
+
+      // Timeout after 120s
+      timeoutRef.current = setTimeout(() => {
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = null;
+        setLoading(false);
+        setMode('choose');
+        setError('Login timed out. Please try again.');
+      }, 120_000);
+    } catch (err) {
+      setLoading(false);
+      setError(err instanceof Error ? err.message : 'Setup token failed');
+    }
+  }, [gateway, onSuccess]);
+
+  const submitApiKey = useCallback(async () => {
+    if (!apiKey.startsWith('sk-ant-') || apiKey.length < 20) return;
     setLoading(true);
     setError(null);
     try {
@@ -48,7 +117,20 @@ function ClaudeSetup({ gateway, onSuccess, onBack, compact }: Omit<Props, 'provi
     } finally {
       setLoading(false);
     }
-  }, [apiKey, isValid, gateway, onSuccess]);
+  }, [apiKey, gateway, onSuccess]);
+
+  const cancelOAuth = useCallback(() => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    pollRef.current = null;
+    setLoading(false);
+    setMode('choose');
+  }, []);
+
+  const openInstallLink = useCallback(() => {
+    const url = 'https://docs.anthropic.com/en/docs/claude-code/getting-started';
+    (window as any).electronAPI?.openExternal?.(url) || window.open(url, '_blank');
+  }, []);
 
   return (
     <div className="space-y-4">
@@ -62,59 +144,155 @@ function ClaudeSetup({ gateway, onSuccess, onBack, compact }: Omit<Props, 'provi
       {!compact && (
         <div className="text-center space-y-1">
           <div className="text-sm font-semibold">Claude Code (Anthropic)</div>
-          <div className="text-[11px] text-muted-foreground">enter your API key to get started</div>
+          <div className="text-[11px] text-muted-foreground">
+            {mode === 'apikey' ? 'enter your Anthropic API key' :
+             mode === 'not-installed' ? 'Claude Code CLI required' :
+             'use your Claude subscription or API key'}
+          </div>
         </div>
       )}
 
-      <div className="space-y-2">
-        <Input
-          ref={inputRef}
-          type="password"
-          placeholder="sk-ant-..."
-          value={apiKey}
-          onChange={e => { setApiKey(e.target.value); setError(null); }}
-          onKeyDown={e => e.key === 'Enter' && isValid && submit()}
-          className="h-8 text-[11px] font-mono"
-          disabled={loading}
-        />
-
-        {error && (
-          <div className="flex items-center gap-1.5 text-[10px] text-destructive">
-            <AlertCircle className="w-3 h-3 shrink-0" />
-            {error}
+      {mode === 'not-installed' ? (
+        <div className="flex flex-col items-center gap-3 py-2">
+          <AlertCircle className="w-6 h-6 text-muted-foreground" />
+          <div className="text-[11px] text-muted-foreground text-center">
+            Claude Code CLI is not installed.
           </div>
-        )}
-
-        <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-          <span>get your key at</span>
-          <a
-            href="#"
-            onClick={(e) => {
-              e.preventDefault();
-              const url = 'https://console.anthropic.com/settings/keys';
-              (window as any).electronAPI?.openExternal?.(url) || window.open(url, '_blank');
-            }}
-            className="text-primary hover:underline inline-flex items-center gap-0.5"
+          <Button
+            size="sm"
+            className="h-7 text-[11px]"
+            onClick={openInstallLink}
           >
-            console.anthropic.com
-            <ExternalLink className="w-2.5 h-2.5" />
-          </a>
+            <ExternalLink className="w-3 h-3 mr-1.5" />
+            install Claude Code
+          </Button>
+          <div className="flex items-center gap-2 text-[10px] text-muted-foreground w-full">
+            <div className="flex-1 h-px bg-border" />
+            or use an API key
+            <div className="flex-1 h-px bg-border" />
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-[11px] w-full"
+            onClick={() => { setMode('apikey'); setError(null); }}
+          >
+            enter API key instead
+          </Button>
         </div>
-      </div>
+      ) : mode === 'oauth-waiting' ? (
+        <div className="flex flex-col items-center gap-3 py-4">
+          <Loader2 className="w-6 h-6 animate-spin text-primary" />
+          <div className="text-[11px] text-muted-foreground">waiting for login in browser...</div>
+          <div className="text-[10px] text-muted-foreground">complete the sign-in in your browser</div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 text-[10px]"
+            onClick={cancelOAuth}
+          >
+            cancel
+          </Button>
+        </div>
+      ) : mode === 'apikey' ? (
+        <>
+          <div className="space-y-2">
+            <Input
+              type="password"
+              placeholder="sk-ant-..."
+              value={apiKey}
+              onChange={e => { setApiKey(e.target.value); setError(null); }}
+              onKeyDown={e => e.key === 'Enter' && submitApiKey()}
+              className="h-8 text-[11px] font-mono"
+              disabled={loading}
+              autoFocus
+            />
+            <Button
+              size="sm"
+              className="h-7 text-[11px] w-full"
+              onClick={submitApiKey}
+              disabled={!apiKey.startsWith('sk-ant-') || apiKey.length < 20 || loading}
+            >
+              {loading ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : null}
+              {loading ? 'connecting...' : 'connect'}
+            </Button>
+          </div>
 
-      <div className="flex items-center gap-2">
-        <Button
-          size="sm"
-          className="h-7 text-[11px] flex-1"
-          onClick={submit}
-          disabled={!isValid || loading}
-        >
-          {loading ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : null}
-          {loading ? 'connecting...' : 'connect'}
-        </Button>
-      </div>
+          <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+            <span>get your key at</span>
+            <a
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                const url = 'https://console.anthropic.com/settings/keys';
+                (window as any).electronAPI?.openExternal?.(url) || window.open(url, '_blank');
+              }}
+              className="text-primary hover:underline inline-flex items-center gap-0.5"
+            >
+              console.anthropic.com
+              <ExternalLink className="w-2.5 h-2.5" />
+            </a>
+          </div>
 
-      {!compact && (
+          {!compact && (
+            <button
+              onClick={() => { setMode('choose'); setError(null); }}
+              className="text-[10px] text-muted-foreground hover:text-foreground transition-colors w-full text-center"
+            >
+              or use Claude subscription instead
+            </button>
+          )}
+        </>
+      ) : (
+        // Choose mode - setup-token button + API key fallback
+        <>
+          <Button
+            size="sm"
+            className="h-8 text-[11px] w-full"
+            onClick={startSetupToken}
+            disabled={loading}
+          >
+            {loading ? <Loader2 className="w-3 h-3 animate-spin mr-1.5" /> : null}
+            use Claude subscription
+          </Button>
+
+          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+            <div className="flex-1 h-px bg-border" />
+            or use an API key
+            <div className="flex-1 h-px bg-border" />
+          </div>
+
+          <div className="space-y-2">
+            <Input
+              type="password"
+              placeholder="sk-ant-..."
+              value={apiKey}
+              onChange={e => { setApiKey(e.target.value); setError(null); }}
+              onKeyDown={e => e.key === 'Enter' && submitApiKey()}
+              className="h-8 text-[11px] font-mono"
+              disabled={loading}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-[11px] w-full"
+              onClick={submitApiKey}
+              disabled={!apiKey.startsWith('sk-ant-') || apiKey.length < 20 || loading}
+            >
+              connect with API key
+            </Button>
+          </div>
+        </>
+      )}
+
+      {error && (
+        <div className="flex items-center gap-1.5 text-[10px] text-destructive">
+          <AlertCircle className="w-3 h-3 shrink-0" />
+          {error}
+        </div>
+      )}
+
+      {!compact && mode !== 'apikey' && mode !== 'not-installed' && (
         <div className="text-[10px] text-muted-foreground text-center">
           stored locally, never leaves your machine
         </div>
