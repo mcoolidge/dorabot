@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { CodeViewer } from './viewers/CodeViewer';
 import { MarkdownViewer } from './viewers/MarkdownViewer';
-import { PDFViewer } from './viewers/PDFViewer';
+const PDFViewer = lazy(() => import('./viewers/PDFViewer').then(m => ({ default: m.PDFViewer })));
 import { ExcelViewer } from './viewers/ExcelViewer';
 import { ImageViewer } from './viewers/ImageViewer';
 import { Button } from '@/components/ui/button';
@@ -96,7 +96,7 @@ export function FileViewer({ filePath, rpc, onClose }: Props) {
       case 'markdown':
         return <MarkdownViewer content={content} />;
       case 'pdf':
-        return <PDFViewer filePath={filePath} rpc={rpc} />;
+        return <Suspense fallback={<div className="p-4 text-xs text-muted-foreground">Loading PDF viewer...</div>}><PDFViewer filePath={filePath} rpc={rpc} /></Suspense>;
       case 'excel':
         return <ExcelViewer filePath={filePath} rpc={rpc} />;
       case 'image':
