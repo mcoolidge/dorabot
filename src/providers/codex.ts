@@ -58,6 +58,32 @@ function runCodexCmd(args: string[], input?: string): Promise<{ stdout: string; 
   });
 }
 
+/**
+ * Check if Codex CLI is installed and runnable.
+ */
+export async function isCodexInstalled(): Promise<boolean> {
+  try {
+    const { code } = await runCodexCmd(['--version']);
+    return code === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if Codex has auth credentials (auth.json with tokens/keys, or OPENAI_API_KEY env).
+ */
+export function hasCodexAuth(): boolean {
+  const authFile = join(codexHome(), 'auth.json');
+  if (existsSync(authFile)) {
+    try {
+      const authData = JSON.parse(readFileSync(authFile, 'utf-8'));
+      if (authData.api_key || authData.token || authData.access_token) return true;
+    } catch { /* ignore */ }
+  }
+  return !!process.env.OPENAI_API_KEY;
+}
+
 export class CodexProvider implements Provider {
   readonly name = 'codex';
   private activeProcess: ReturnType<typeof spawn> | null = null;
