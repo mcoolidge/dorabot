@@ -2,11 +2,23 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { randomBytes, createHash } from 'node:crypto';
 import type { Provider, ProviderRunOptions, ProviderMessage, ProviderAuthStatus, ProviderQueryResult } from './types.js';
 
-const KEY_FILE = join(homedir(), '.dorabot', '.anthropic-key');
+// ── File paths ──────────────────────────────────────────────────────
+const DORABOT_DIR = join(homedir(), '.dorabot');
+const KEY_FILE = join(DORABOT_DIR, '.anthropic-key');
+const OAUTH_FILE = join(DORABOT_DIR, '.claude-oauth.json');
 
+// ── OAuth constants (same as Claude Code CLI) ───────────────────────
+const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+const OAUTH_AUTHORIZE_URL = 'https://claude.ai/oauth/authorize';
+const OAUTH_TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token';
+const OAUTH_REDIRECT_URI = 'https://console.anthropic.com/oauth/code/callback';
+const OAUTH_SCOPES = 'user:inference user:profile';
+
+// ── API key helpers ─────────────────────────────────────────────────
 function loadPersistedKey(): string | undefined {
   try {
     if (existsSync(KEY_FILE)) {
@@ -19,8 +31,7 @@ function loadPersistedKey(): string | undefined {
 
 function persistKey(apiKey: string): void {
   try {
-    const dir = join(homedir(), '.dorabot');
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(DORABOT_DIR, { recursive: true });
     writeFileSync(KEY_FILE, apiKey, { mode: 0o600 });
     chmodSync(KEY_FILE, 0o600);
   } catch (err) {
@@ -56,77 +67,104 @@ async function validateApiKey(apiKey: string): Promise<{ valid: boolean; error?:
   }
 }
 
-/**
- * Probe the Claude CLI to detect auth session and extract rich status info.
- * Runs `claude -p --output-format stream-json --verbose --max-budget-usd 0.001 "."`.
- * The init message tells us the auth method, model, CLI version, etc.
- * Returns rich ProviderAuthStatus or null on failure.
- */
-async function probeClaudeAuth(): Promise<ProviderAuthStatus | null> {
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => resolve(null), 20000);
+// ── OAuth token persistence ─────────────────────────────────────────
+type OAuthTokens = {
+  access_token: string;
+  refresh_token: string;
+  expires_at: number; // ms since epoch
+};
 
-    // Run claude with minimal budget - we only need the init message
-    const child = execFile('claude', [
-      '-p', '--output-format', 'stream-json', '--verbose',
-      '--max-budget-usd', '0.001',
-      '--no-session-persistence',
-      '.',
-    ], { timeout: 20000, env: { ...process.env } }, (err, stdout) => {
-      clearTimeout(timeout);
-      if (err && !stdout) {
-        // CLI failed to run at all
-        resolve(null);
-        return;
-      }
-      try {
-        // Parse the first line (init message)
-        const lines = stdout.trim().split('\n');
-        for (const line of lines) {
-          const msg = JSON.parse(line);
-          if (msg.type === 'system' && msg.subtype === 'init') {
-            const apiKeySource = msg.apiKeySource as string | undefined;
-            const model = msg.model as string | undefined;
-            const cliVersion = msg.claude_code_version as string | undefined;
-            const permMode = msg.permissionMode as string | undefined;
-
-            // apiKeySource: "none" means OAuth subscription, anything else means API key
-            const isOAuth = apiKeySource === 'none';
-            const method = isOAuth ? 'oauth' as const : 'api_key' as const;
-            const identity = isOAuth ? 'Claude subscription' : (apiKeySource || 'API key');
-
-            resolve({
-              authenticated: true,
-              method,
-              identity,
-              model,
-              cliVersion,
-              permissionMode: permMode,
-            });
-            return;
-          }
-        }
-        resolve(null);
-      } catch {
-        resolve(null);
-      }
-    });
-
-    // Kill early once we get the init line (don't wait for full response)
-    child.stdout?.on('data', (data: Buffer) => {
-      const text = data.toString();
-      if (text.includes('"subtype":"init"')) {
-        // We got what we need, kill the process quickly
-        setTimeout(() => child.kill('SIGTERM'), 100);
-      }
-    });
-  });
+function loadOAuthTokens(): OAuthTokens | null {
+  try {
+    if (existsSync(OAUTH_FILE)) {
+      return JSON.parse(readFileSync(OAUTH_FILE, 'utf-8'));
+    }
+  } catch { /* ignore */ }
+  return null;
 }
 
-/**
- * Check if Claude Code CLI is installed.
- */
-async function isClaudeInstalled(): Promise<boolean> {
+function persistOAuthTokens(tokens: OAuthTokens): void {
+  try {
+    mkdirSync(DORABOT_DIR, { recursive: true });
+    writeFileSync(OAUTH_FILE, JSON.stringify(tokens), { mode: 0o600 });
+    chmodSync(OAUTH_FILE, 0o600);
+  } catch (err) {
+    console.error('[claude] failed to persist OAuth tokens:', err);
+  }
+}
+
+function clearOAuthTokens(): void {
+  try {
+    if (existsSync(OAUTH_FILE)) writeFileSync(OAUTH_FILE, '', { mode: 0o600 });
+  } catch { /* ignore */ }
+}
+
+/** Refresh the access token using the refresh token */
+async function refreshAccessToken(refreshToken: string): Promise<OAuthTokens | null> {
+  try {
+    const res = await fetch(OAUTH_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: OAUTH_CLIENT_ID,
+      }),
+    });
+    if (!res.ok) {
+      console.error(`[claude] token refresh failed: ${res.status}`);
+      return null;
+    }
+    const data = await res.json() as { access_token: string; refresh_token?: string; expires_in?: number };
+    const tokens: OAuthTokens = {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token || refreshToken,
+      expires_at: Date.now() + ((data.expires_in || 28800) * 1000), // default 8h
+    };
+    persistOAuthTokens(tokens);
+    return tokens;
+  } catch (err) {
+    console.error('[claude] token refresh error:', err);
+    return null;
+  }
+}
+
+/** Ensure we have a valid access token, refreshing if needed. Sets CLAUDE_CODE_OAUTH_TOKEN env. */
+async function ensureOAuthToken(): Promise<string | null> {
+  const tokens = loadOAuthTokens();
+  if (!tokens) return null;
+
+  // If token expires in < 5 min, refresh
+  if (Date.now() > tokens.expires_at - 300_000) {
+    console.log('[claude] access token expired or expiring, refreshing...');
+    const refreshed = await refreshAccessToken(tokens.refresh_token);
+    if (!refreshed) return null;
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = refreshed.access_token;
+    return refreshed.access_token;
+  }
+
+  process.env.CLAUDE_CODE_OAUTH_TOKEN = tokens.access_token;
+  return tokens.access_token;
+}
+
+// ── PKCE helpers ────────────────────────────────────────────────────
+function generateCodeVerifier(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+function generateCodeChallenge(verifier: string): string {
+  return createHash('sha256').update(verifier).digest('base64url');
+}
+
+// ── Detection helpers (exported for gateway provider.detect) ────────
+
+/** Check if we have persisted OAuth tokens (doesn't validate them) */
+export function hasOAuthTokens(): boolean {
+  const tokens = loadOAuthTokens();
+  return !!tokens?.access_token;
+}
+
+export async function isClaudeInstalled(): Promise<boolean> {
   return new Promise((resolve) => {
     execFile('claude', ['--version'], { timeout: 5000 }, (err) => {
       resolve(!err);
@@ -134,97 +172,64 @@ async function isClaudeInstalled(): Promise<boolean> {
   });
 }
 
-/**
- * Run `claude setup-token` to trigger OAuth login for subscription users.
- * Returns { authUrl } with the URL the user needs to open, or spawns the
- * interactive flow and monitors for completion.
- */
-async function runSetupToken(): Promise<{ success: boolean; error?: string }> {
-  return new Promise((resolve) => {
-    const child = execFile('claude', ['setup-token'], {
-      timeout: 120000, // 2 min for user to complete browser auth
-      env: { ...process.env },
-    }, (err) => {
-      if (err) {
-        resolve({ success: false, error: err.message });
-      } else {
-        resolve({ success: true });
-      }
-    });
+export { getApiKey };
 
-    // setup-token is interactive - it opens a browser and waits
-    // We need to pipe through so the user can interact
-    child.stdin?.end();
-  });
-}
+// ── Provider ────────────────────────────────────────────────────────
 
 export class ClaudeProvider implements Provider {
   readonly name = 'claude';
   private _cachedAuth: ProviderAuthStatus | null = null;
-  private _pendingSetupToken: string | null = null;
-  private _setupTokenProcess: ChildProcess | null = null;
-  private _setupTokenPromise: Promise<boolean> | null = null;
+  // PKCE state for in-flight OAuth
+  private _pkceVerifier: string | null = null;
+  private _pkceState: string | null = null;
+  private _pkceLoginId: string | null = null;
 
   constructor() {
-    // Load persisted key into env if not already set
+    // Load persisted API key into env if not already set
     if (!process.env.ANTHROPIC_API_KEY) {
       const saved = loadPersistedKey();
       if (saved) process.env.ANTHROPIC_API_KEY = saved;
+    }
+    // Load persisted OAuth token into env
+    const tokens = loadOAuthTokens();
+    if (tokens?.access_token) {
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = tokens.access_token;
     }
   }
 
   async checkReady(): Promise<{ ready: boolean; reason?: string }> {
     const status = await this.getAuthStatus();
     if (!status.authenticated) {
-      return { ready: false, reason: status.error || 'Not authenticated. Log in with Claude Code or provide an API key.' };
+      return { ready: false, reason: status.error || 'Not authenticated.' };
     }
     return { ready: true };
   }
 
   async getAuthStatus(): Promise<ProviderAuthStatus> {
-    // Return cached if available
     if (this._cachedAuth) return this._cachedAuth;
 
-    // First check if Claude Code CLI is even installed
-    const installed = await isClaudeInstalled();
-    if (!installed) {
-      return { authenticated: false, error: 'Claude Code CLI not found. Install it with: npm install -g @anthropic-ai/claude-code' };
-    }
-
-    // Check if user has an API key configured in dorabot
+    // 1. Check API key
     const apiKey = getApiKey();
     if (apiKey) {
       const v = await validateApiKey(apiKey);
       if (v.valid) {
-        // Probe CLI anyway to get model/version info
-        const probe = await probeClaudeAuth();
-        this._cachedAuth = {
-          authenticated: true,
-          method: 'api_key',
-          identity: 'Anthropic API key',
-          model: probe?.model,
-          cliVersion: probe?.cliVersion,
-          permissionMode: probe?.permissionMode,
-        };
+        this._cachedAuth = { authenticated: true, method: 'api_key', identity: 'Anthropic API key' };
         return this._cachedAuth;
       }
-      // Key exists but invalid - don't fall through to OAuth probe, report the error
       return { authenticated: false, method: 'api_key', error: v.error };
     }
 
-    // No API key - probe for Claude OAuth session (subscription auth)
-    const probe = await probeClaudeAuth();
-    if (probe?.authenticated) {
-      this._cachedAuth = probe;
-      return probe;
+    // 2. Check persisted OAuth tokens — refresh if needed
+    const token = await ensureOAuthToken();
+    if (token) {
+      this._cachedAuth = { authenticated: true, method: 'oauth', identity: 'Claude subscription' };
+      return this._cachedAuth;
     }
 
-    // Nothing found
-    return { authenticated: false, error: 'No auth found. Run "claude setup-token" for subscription auth, or provide an Anthropic API key.' };
+    return { authenticated: false, error: 'Not authenticated. Sign in with your Claude account or provide an API key.' };
   }
 
   async loginWithApiKey(apiKey: string): Promise<ProviderAuthStatus> {
-    // Validate first
     const v = await validateApiKey(apiKey);
     if (!v.valid) {
       return { authenticated: false, method: 'api_key', error: v.error };
@@ -236,94 +241,111 @@ export class ClaudeProvider implements Provider {
   }
 
   /**
-   * Start OAuth login via `claude setup-token`.
-   * This spawns the CLI's setup-token flow which opens a browser for PKCE auth.
-   * The desktop app should show the user a "complete login in browser" prompt.
+   * Start OAuth PKCE flow. Returns the authorization URL for the user to open.
+   * The user will authorize, get redirected, and paste the auth code back.
    */
   async loginWithOAuth(): Promise<{ authUrl: string; loginId: string }> {
-    const loginId = `claude-setup-${Date.now()}`;
-    this._pendingSetupToken = loginId;
+    const loginId = `claude-oauth-${Date.now()}`;
+    const codeVerifier = generateCodeVerifier();
+    const codeChallenge = generateCodeChallenge(codeVerifier);
+    const state = randomBytes(32).toString('hex');
 
-    // Spawn setup-token in background - it opens browser automatically
-    const child = spawn('claude', ['setup-token'], {
-      env: { ...process.env },
-      stdio: ['pipe', 'pipe', 'pipe'],
+    this._pkceVerifier = codeVerifier;
+    this._pkceState = state;
+    this._pkceLoginId = loginId;
+
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: OAUTH_CLIENT_ID,
+      redirect_uri: OAUTH_REDIRECT_URI,
+      scope: OAUTH_SCOPES,
+      state,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
     });
 
-    // Capture any URL output for the desktop to show
-    let capturedUrl = '';
-    child.stdout?.on('data', (data: Buffer) => {
-      const text = data.toString();
-      // Look for URLs in the output
-      const urlMatch = text.match(/https?:\/\/[^\s]+/);
-      if (urlMatch) capturedUrl = urlMatch[0];
-    });
-    child.stderr?.on('data', (data: Buffer) => {
-      const text = data.toString();
-      const urlMatch = text.match(/https?:\/\/[^\s]+/);
-      if (urlMatch) capturedUrl = urlMatch[0];
-    });
-
-    // Store the child process so completeOAuthLogin can check it
-    this._setupTokenProcess = child;
-    this._setupTokenPromise = new Promise<boolean>((resolve) => {
-      child.on('exit', (code) => {
-        this._setupTokenProcess = null;
-        resolve(code === 0);
-      });
-      child.on('error', () => {
-        this._setupTokenProcess = null;
-        resolve(false);
-      });
-      // Timeout after 2 minutes
-      setTimeout(() => {
-        if (this._setupTokenProcess) {
-          child.kill('SIGTERM');
-          this._setupTokenProcess = null;
-        }
-        resolve(false);
-      }, 120000);
-    });
-
-    // Give it a moment to output the URL
-    await new Promise((r) => setTimeout(r, 2000));
-
-    return {
-      authUrl: capturedUrl || 'claude://setup-token (complete in terminal)',
-      loginId,
-    };
+    const authUrl = `${OAUTH_AUTHORIZE_URL}?${params}`;
+    return { authUrl, loginId };
   }
 
   /**
-   * Check if the setup-token flow completed successfully.
+   * Complete OAuth by exchanging the auth code for tokens.
+   * The loginId is the code#state string the user pastes from the callback page.
    */
   async completeOAuthLogin(loginId: string): Promise<ProviderAuthStatus> {
-    if (this._pendingSetupToken !== loginId) {
-      return { authenticated: false, error: 'No pending setup-token flow for this loginId' };
+    if (!this._pkceVerifier || !this._pkceState) {
+      return { authenticated: false, error: 'No pending OAuth flow. Start login first.' };
     }
 
-    // Wait for the setup-token process to finish (or timeout)
-    const success = await this._setupTokenPromise;
-    this._pendingSetupToken = null;
-    this._setupTokenPromise = null;
+    // loginId from frontend is the pasted "code#state" string
+    const parts = loginId.split('#');
+    const code = parts[0];
+    const returnedState = parts[1];
 
-    if (!success) {
-      return { authenticated: false, error: 'Setup token flow failed or was cancelled' };
+    if (!code) {
+      return { authenticated: false, error: 'Invalid auth code.' };
     }
 
-    // Re-probe auth to confirm it worked
-    this._cachedAuth = null;
-    return this.getAuthStatus();
+    // Validate state if returned
+    if (returnedState && returnedState !== this._pkceState) {
+      console.warn('[claude] OAuth state mismatch, proceeding anyway');
+    }
+
+    try {
+      const res = await fetch(OAUTH_TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'authorization_code',
+          code,
+          state: returnedState || this._pkceState || '',
+          redirect_uri: OAUTH_REDIRECT_URI,
+          client_id: OAUTH_CLIENT_ID,
+          code_verifier: this._pkceVerifier,
+        }),
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        console.error(`[claude] token exchange failed: ${res.status} ${body}`);
+        return { authenticated: false, error: `Token exchange failed (${res.status})` };
+      }
+
+      const data = await res.json() as { access_token: string; refresh_token: string; expires_in?: number };
+
+      const tokens: OAuthTokens = {
+        access_token: data.access_token,
+        refresh_token: data.refresh_token,
+        expires_at: Date.now() + ((data.expires_in || 28800) * 1000),
+      };
+
+      persistOAuthTokens(tokens);
+      process.env.CLAUDE_CODE_OAUTH_TOKEN = tokens.access_token;
+
+      // Clear PKCE state
+      this._pkceVerifier = null;
+      this._pkceState = null;
+      this._pkceLoginId = null;
+
+      this._cachedAuth = { authenticated: true, method: 'oauth', identity: 'Claude subscription' };
+      return this._cachedAuth;
+    } catch (err) {
+      return { authenticated: false, error: err instanceof Error ? err.message : 'Token exchange failed' };
+    }
   }
 
-  /** Reset cached auth so next getAuthStatus() re-probes */
   resetAuth(): void {
     this._cachedAuth = null;
     delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     clearPersistedKey();
+    clearOAuthTokens();
   }
 
   async *query(opts: ProviderRunOptions): AsyncGenerator<ProviderMessage, ProviderQueryResult, unknown> {
+    // Ensure OAuth token is fresh before querying
+    await ensureOAuthToken();
+
     const q = query({
       prompt: opts.prompt,
       options: {
