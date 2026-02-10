@@ -1,9 +1,9 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import type { useGateway } from '../hooks/useGateway';
 import { ProviderSetup } from './ProviderSetup';
 import { AuroraBackground } from './aceternity/aurora-background';
 import { Card, CardContent } from '@/components/ui/card';
-import { Brain, Sparkles, Key, Check } from 'lucide-react';
+import { Brain, Sparkles, Key, Check, Loader2 } from 'lucide-react';
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
@@ -15,7 +15,7 @@ type ProviderChoice = {
   method: 'oauth' | 'apikey';
 };
 
-type Step = 'choose' | 'auth' | 'success';
+type Step = 'choose' | 'auth' | 'detecting' | 'success';
 
 export function OnboardingOverlay({ gateway, onComplete }: Props) {
   const [step, setStep] = useState<Step>('choose');
@@ -28,8 +28,27 @@ export function OnboardingOverlay({ gateway, onComplete }: Props) {
     } catch {
       // continue anyway
     }
+
+    // For Claude Code, first try detecting existing auth (OAuth session)
+    if (c.provider === 'claude' && c.method === 'oauth') {
+      setStep('detecting');
+      try {
+        const status = await gateway.getProviderStatus();
+        if (status?.auth?.authenticated) {
+          // Already logged in via claude login - skip auth step
+          setStep('success');
+          setTimeout(onComplete, 800);
+          return;
+        }
+      } catch { /* fall through to auth */ }
+      // Not authenticated - show API key input as fallback
+      setChoice({ provider: 'claude', method: 'apikey' });
+      setStep('auth');
+      return;
+    }
+
     setStep('auth');
-  }, [gateway]);
+  }, [gateway, onComplete]);
 
   const handleAuthSuccess = useCallback(() => {
     setStep('success');
@@ -48,6 +67,8 @@ export function OnboardingOverlay({ gateway, onComplete }: Props) {
             {step === 'choose' && (
               <ChooseStep onChoice={handleChoice} onSkip={handleSkip} />
             )}
+
+            {step === 'detecting' && <DetectingStep />}
 
             {step === 'auth' && choice && (
               <AuthStep
@@ -84,6 +105,20 @@ function ChooseStep({ onChoice, onSkip }: { onChoice: (c: ProviderChoice) => voi
 
       {/* Provider + method cards */}
       <div className="space-y-2">
+        {/* Claude Code - detects existing OAuth or falls back to API key */}
+        <button
+          onClick={() => onChoice({ provider: 'claude', method: 'oauth' })}
+          className="flex items-start gap-3 w-full px-4 py-3 rounded-xl border-2 border-border bg-card/80 backdrop-blur hover:border-primary/50 hover:bg-card transition-all text-left"
+        >
+          <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
+            <Brain className="w-4 h-4 text-primary" />
+          </div>
+          <div>
+            <div className="text-xs font-semibold text-foreground">Claude Code</div>
+            <div className="text-[10px] text-muted-foreground mt-0.5">Use your Claude subscription or Anthropic API key</div>
+          </div>
+        </button>
+
         {/* Codex with ChatGPT login */}
         <button
           onClick={() => onChoice({ provider: 'codex', method: 'oauth' })}
@@ -95,20 +130,6 @@ function ChooseStep({ onChoice, onSkip }: { onChoice: (c: ProviderChoice) => voi
           <div>
             <div className="text-xs font-semibold text-foreground">Sign in with ChatGPT</div>
             <div className="text-[10px] text-muted-foreground mt-0.5">Use your OpenAI account (ChatGPT Plus required)</div>
-          </div>
-        </button>
-
-        {/* Claude Code with API key */}
-        <button
-          onClick={() => onChoice({ provider: 'claude', method: 'apikey' })}
-          className="flex items-start gap-3 w-full px-4 py-3 rounded-xl border-2 border-border bg-card/80 backdrop-blur hover:border-primary/50 hover:bg-card transition-all text-left"
-        >
-          <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
-            <Brain className="w-4 h-4 text-primary" />
-          </div>
-          <div>
-            <div className="text-xs font-semibold text-foreground">Claude Code (Anthropic)</div>
-            <div className="text-[10px] text-muted-foreground mt-0.5">Use your Anthropic API key</div>
           </div>
         </button>
 
@@ -137,6 +158,16 @@ function ChooseStep({ onChoice, onSkip }: { onChoice: (c: ProviderChoice) => voi
           skip for now
         </button>
       </div>
+    </div>
+  );
+}
+
+function DetectingStep() {
+  return (
+    <div className="flex flex-col items-center gap-3 py-8">
+      <Loader2 className="w-8 h-8 text-primary animate-spin" />
+      <div className="text-sm font-medium text-foreground">detecting Claude session...</div>
+      <div className="text-[10px] text-muted-foreground">checking for existing login</div>
     </div>
   );
 }

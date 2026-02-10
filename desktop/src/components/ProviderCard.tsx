@@ -31,6 +31,7 @@ export function ProviderCard({ gateway, disabled }: Props) {
   const providerName = (cfg?.provider?.name as string) || 'claude';
   const authenticated = providerInfo?.auth?.authenticated ?? false;
   const authMethod = providerInfo?.auth?.method;
+  const authIdentity = providerInfo?.auth?.identity;
 
   const handleProviderChange = useCallback(async (name: string) => {
     try {
@@ -97,7 +98,7 @@ export function ProviderCard({ gateway, disabled }: Props) {
                 <div className="text-[11px] font-medium text-foreground">authentication</div>
                 <div className="text-[10px] text-muted-foreground">
                   {authenticated
-                    ? `authenticated via ${authMethod === 'oauth' ? 'ChatGPT OAuth' : 'API key'}`
+                    ? `connected via ${authIdentity || (authMethod === 'oauth' ? 'OAuth' : 'API key')}`
                     : 'not authenticated'}
                 </div>
               </div>
