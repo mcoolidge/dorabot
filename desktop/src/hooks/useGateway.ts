@@ -1,5 +1,14 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 
+/** Deep-set a dotted key path (e.g. "provider.codex.model") in an immutable object */
+function setNestedKey(obj: Record<string, unknown>, key: string, value: unknown): Record<string, unknown> {
+  const parts = key.split('.');
+  if (parts.length === 1) return { ...obj, [key]: value };
+  const [head, ...rest] = parts;
+  const child = (obj[head] as Record<string, unknown>) || {};
+  return { ...obj, [head]: setNestedKey({ ...child }, rest.join('.'), value) };
+}
+
 // strip mcp__<server>__ prefix from SDK tool names
 function cleanToolName(name: string): string {
   if (!name.startsWith('mcp__')) return name;
@@ -486,19 +495,7 @@ export function useGateway(url = 'wss://localhost:18789') {
 
       case 'config.update': {
         const d = data as { key: string; value: unknown };
-        setConfigData(prev => {
-          if (!prev) return prev;
-          const updated = { ...prev };
-          // handle nested keys like security.approvalMode, browser.enabled
-          const parts = d.key.split('.');
-          if (parts.length === 1) {
-            updated[d.key] = d.value;
-          } else {
-            const [section, field] = parts;
-            updated[section] = { ...(updated[section] as Record<string, unknown> || {}), [field]: d.value };
-          }
-          return updated;
-        });
+        setConfigData(prev => prev ? setNestedKey(prev, d.key, d.value) : prev);
         break;
       }
 
@@ -765,18 +762,7 @@ export function useGateway(url = 'wss://localhost:18789') {
 
   const setConfig = useCallback(async (key: string, value: unknown) => {
     // optimistic local update
-    setConfigData(prev => {
-      if (!prev) return prev;
-      const updated = { ...prev };
-      const parts = key.split('.');
-      if (parts.length === 1) {
-        updated[key] = value;
-      } else {
-        const [section, field] = parts;
-        updated[section] = { ...(updated[section] as Record<string, unknown> || {}), [field]: value };
-      }
-      return updated;
-    });
+    setConfigData(prev => prev ? setNestedKey(prev, key, value) : prev);
     await rpc('config.set', { key, value });
   }, [rpc]);
 
