@@ -16,6 +16,7 @@ export type BrowserConfig = {
 };
 
 const DEFAULT_CDP_PORT = 19222;
+const DEFAULT_PROFILE_DIR = join(homedir(), '.dorabot', 'browser', 'profile');
 
 // singleton state
 let browser: Browser | null = null;
@@ -112,7 +113,9 @@ export async function launchBrowser(config: BrowserConfig = {}): Promise<void> {
     throw new Error('No Chromium-based browser found. Install Chrome, Brave, or Edge, or set browser.executablePath in config.');
   }
 
-  const profileDir = config.profileDir || info.dataDir;
+  // Use dedicated dorabot profile by default — not the user's personal Chrome profile.
+  // Users can opt into their real profile via browser.profileDir in config.
+  const profileDir = config.profileDir || DEFAULT_PROFILE_DIR;
 
   // check if browser is already running with CDP
   const existingPort = readDevToolsPort(profileDir);
