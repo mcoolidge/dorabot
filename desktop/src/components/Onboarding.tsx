@@ -3,7 +3,8 @@ import type { useGateway } from '../hooks/useGateway';
 import { ProviderSetup } from './ProviderSetup';
 import { AuroraBackground } from './aceternity/aurora-background';
 import { Card, CardContent } from '@/components/ui/card';
-import { Check, Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Check, Loader2, Monitor, Hand, ChevronRight } from 'lucide-react';
 
 type Props = {
   gateway: ReturnType<typeof useGateway>;
@@ -20,7 +21,17 @@ type DetectResult = {
   codex: { installed: boolean; hasAuth: boolean };
 };
 
-type Step = 'detecting' | 'ready' | 'choose' | 'auth' | 'success';
+type Step = 'detecting' | 'ready' | 'choose' | 'auth' | 'success' | 'permissions';
+
+const isMac = (window as any).electronAPI?.platform === 'darwin';
+
+function goToPermissionsOrComplete(setStep: (s: Step) => void, onComplete: () => void) {
+  if (isMac) {
+    setStep('permissions');
+  } else {
+    onComplete();
+  }
+}
 
 export function OnboardingOverlay({ gateway, onComplete }: Props) {
   const [step, setStep] = useState<Step>('detecting');
@@ -67,10 +78,10 @@ export function OnboardingOverlay({ gateway, onComplete }: Props) {
     })();
   }, [gateway]);
 
-  // Auto-complete from ready step after 1.2s
+  // Auto-advance from ready step after 1.2s
   useEffect(() => {
     if (step !== 'ready') return;
-    const timer = setTimeout(onComplete, 1200);
+    const timer = setTimeout(() => goToPermissionsOrComplete(setStep, onComplete), 1200);
     return () => clearTimeout(timer);
   }, [step, onComplete]);
 
@@ -93,7 +104,7 @@ export function OnboardingOverlay({ gateway, onComplete }: Props) {
       }
     } catch { /* show generic success */ }
     setStep('success');
-    setTimeout(onComplete, 1200);
+    setTimeout(() => goToPermissionsOrComplete(setStep, onComplete), 1200);
   }, [onComplete, gateway]);
 
   const handleSkip = useCallback(() => {
@@ -128,6 +139,8 @@ export function OnboardingOverlay({ gateway, onComplete }: Props) {
             )}
 
             {step === 'success' && <SuccessStep authInfo={authInfo} />}
+
+            {step === 'permissions' && <PermissionsStep onComplete={onComplete} />}
           </div>
         </div>
       </AuroraBackground>
@@ -325,6 +338,84 @@ function SuccessStep({ authInfo }: { authInfo: { method?: string; identity?: str
           <div>connected via {methodLabel}</div>
         </div>
       )}
+    </div>
+  );
+}
+
+const MAC_PERMISSIONS = [
+  {
+    id: 'screen-recording',
+    label: 'Screen Recording',
+    description: 'lets dorabot take screenshots of your screen',
+    icon: Monitor,
+    settingsUrl: 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+  },
+  {
+    id: 'accessibility',
+    label: 'Accessibility',
+    description: 'lets dorabot manage windows, control apps, and automate your Mac',
+    icon: Hand,
+    settingsUrl: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
+  },
+];
+
+function PermissionsStep({ onComplete }: { onComplete: () => void }) {
+  const openSettings = (url: string) => {
+    const api = (window as any).electronAPI;
+    if (api?.openExternal) {
+      api.openExternal(url);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="text-center space-y-2">
+        <div className="relative w-20 h-20 mx-auto">
+          <div className="absolute inset-0 rounded-full bg-success/30 blur-xl animate-pulse" />
+          <img src="/dorabot-computer.png" alt="dorabot" className="relative w-20 h-20 dorabot-alive" />
+        </div>
+        <div>
+          <h1 className="text-base font-semibold text-foreground">one more thing</h1>
+          <p className="text-[11px] text-muted-foreground mt-1">
+            grant these macOS permissions so dorabot can use all its tools
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {MAC_PERMISSIONS.map(perm => (
+          <button
+            key={perm.id}
+            onClick={() => openSettings(perm.settingsUrl)}
+            className="flex items-start gap-3 w-full px-4 py-3 rounded-xl border-2 border-border bg-card/80 backdrop-blur hover:border-primary/50 hover:bg-card transition-all text-left group"
+          >
+            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
+              <perm.icon className="w-4 h-4 text-primary" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-semibold text-foreground">{perm.label}</div>
+              <div className="text-[10px] text-muted-foreground mt-0.5">{perm.description}</div>
+            </div>
+            <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-primary shrink-0 mt-1 transition-colors" />
+          </button>
+        ))}
+      </div>
+
+      <div className="text-[10px] text-muted-foreground bg-muted/50 rounded-lg px-3 py-2 text-center">
+        add <strong>dorabot</strong> (or your terminal) in each section of System Settings &gt; Privacy &amp; Security
+      </div>
+
+      <div className="flex flex-col items-center gap-2">
+        <Button size="sm" className="w-full h-8 text-xs" onClick={onComplete}>
+          done
+        </Button>
+        <button
+          onClick={onComplete}
+          className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+        >
+          i'll do this later
+        </button>
+      </div>
     </div>
   );
 }
