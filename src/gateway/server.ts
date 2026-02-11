@@ -817,6 +817,31 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               for (const block of content) {
                 const b = block as Record<string, unknown>;
                 if (b.type === 'text') agentText = b.text as string;
+                // broadcast tool_use for non-streaming providers (status bar + channel status)
+                if (!hadStreamEvents && b.type === 'tool_use') {
+                  const toolName = cleanToolName(b.name as string);
+                  if (toolName === 'message') usedMessageTool = true;
+                  broadcast({
+                    event: 'agent.tool_use',
+                    data: { source, sessionKey, tool: toolName, timestamp: Date.now() },
+                  });
+
+                  const tl = toolLogs.get(sessionKey);
+                  if (tl) {
+                    if (tl.current) tl.completed.push({ name: tl.current.name, detail: tl.current.detail });
+                    const inputStr = typeof b.input === 'string' ? b.input : JSON.stringify(b.input || {});
+                    let detail = '';
+                    try { detail = extractToolDetail(toolName, JSON.parse(inputStr)); } catch {}
+                    tl.current = { name: toolName, inputJson: inputStr, detail };
+                    tl.lastEditAt = Date.now();
+                    const sm = statusMessages.get(sessionKey);
+                    if (sm) {
+                      const text = buildToolStatusText(tl.completed, tl.current);
+                      const h = getChannelHandler(sm.channel);
+                      if (h) { try { await h.edit(sm.messageId, text, sm.chatId); } catch {} }
+                    }
+                  }
+                }
               }
             }
           }

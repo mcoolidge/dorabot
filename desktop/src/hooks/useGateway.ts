@@ -409,12 +409,14 @@ export function useGateway(url = 'ws://localhost:18789') {
             if (b.type === 'text' && typeof b.text === 'string') {
               setChatItems(prev => [...prev, { type: 'text', content: b.text as string, streaming: false, timestamp: d.timestamp || Date.now() }]);
             } else if (b.type === 'tool_use') {
+              // streaming: true so tool cards show animations while waiting for result
+              // (Codex sends full tool_use blocks, but result comes later)
               setChatItems(prev => [...prev, {
                 type: 'tool_use',
                 id: (b.id as string) || '',
                 name: cleanToolName((b.name as string) || 'unknown'),
                 input: typeof b.input === 'string' ? b.input : JSON.stringify(b.input || {}),
-                streaming: false,
+                streaming: true,
                 timestamp: d.timestamp || Date.now(),
               }]);
             } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
@@ -437,7 +439,7 @@ export function useGateway(url = 'ws://localhost:18789') {
           if (idx >= 0) {
             const updated = [...prev];
             const item = updated[idx] as Extract<ChatItem, { type: 'tool_use' }>;
-            updated[idx] = { ...item, output: d.content, imageData: d.imageData, is_error: d.is_error };
+            updated[idx] = { ...item, output: d.content, imageData: d.imageData, is_error: d.is_error, streaming: false };
             return updated;
           }
           return prev;

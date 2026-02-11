@@ -1,32 +1,35 @@
-# dorabot
+<div align="center">
+  <img src="dorabot.png" width="120" />
 
-Your personal AI agent that lives on WhatsApp, Telegram, and a desktop app. It can browse the web, send messages, manage files, run code, and handle scheduled tasks — all with persistent memory across conversations.
+  # dorabot
+
+  **Turn Claude Code and Codex into your own OpenClaw.**
+
+  You already pay for these models. dorabot connects them to WhatsApp, Telegram, your browser, email, and your Mac — so they can work outside the IDE.
+
+</div>
 
 <img width="4336" height="2644" alt="image" src="https://github.com/user-attachments/assets/8ebfb9cf-0e41-45b9-9fed-26b5a9d14d5c" />
 
+## What It Does
 
-## What Can It Do?
-
-- **Chat anywhere** — Talk to the same agent on WhatsApp, Telegram, or the desktop app. It remembers everything across channels.
-- **Browse the web** — Opens pages, fills forms, clicks buttons, takes screenshots. Logs into sites once with a persistent browser profile.
-- **Schedule tasks** — Set reminders, recurring jobs, or full cron schedules. "Remind me to check email every morning at 9am."
-- **Read and send email** — Manages your inbox via [himalaya](https://github.com/pimalaya/himalaya).
-- **Work with GitHub** — Create PRs, review issues, check CI — anything the `gh` CLI can do.
-- **Run code and manage files** — Full access to your terminal, file system, and dev tools.
-- **Learn about you** — Workspace files let you define its personality, teach it about yourself, and store persistent facts.
-- **Extend with skills** — Drop a markdown file in a folder and the agent picks up new capabilities automatically.
-
+- Chat on WhatsApp, Telegram, or the desktop app — persistent memory across channels
+- Browse the web: fill forms, click buttons, read pages, stay logged in
+- Read and send email
+- Schedule reminders, recurring tasks, and cron jobs
+- Create PRs, review issues, check CI via GitHub
+- Control your Mac: windows, apps, Spotify, Calendar, system settings
+- Generate and edit images via Gemini
+- Extend with custom skills (drop a markdown file in a folder)
 
 https://github.com/user-attachments/assets/d675347a-46c0-4767-b35a-e7a1db6386f9
-
-
 
 ## Quick Start
 
 ### Prerequisites
 
 - Node.js 22+
-- An Anthropic API key (`ANTHROPIC_API_KEY`) or a [Claude Pro/Max subscription](https://claude.ai) logged in via the `claude` CLI
+- A **Claude** account (API key or Pro/Max subscription) or **OpenAI** account (API key or ChatGPT login) — dorabot talks to Claude via the [Agent SDK](https://www.npmjs.com/package/@anthropic-ai/claude-agent-sdk) and to OpenAI via the [Codex SDK](https://www.npmjs.com/package/@openai/codex-sdk)
 - Chrome, Brave, or Edge (for browser features)
 
 ### Install
@@ -42,24 +45,14 @@ npm link
 ### Run
 
 ```bash
-# interactive mode
+# gateway mode — powers desktop app and channels
+dorabot -g
+
+# interactive terminal
 dorabot -i
 
 # one-off question
 dorabot -m "what's the weather in SF?"
-
-# start the gateway (needed for desktop app and channels)
-dorabot -g
-```
-
-## Desktop App
-
-A native control center for your agent with real-time streaming, session history, channel management, and a file explorer.
-
-```bash
-cd desktop
-npm install
-npm run electron:dev    # requires gateway running
 ```
 
 ## Channels
@@ -70,39 +63,38 @@ npm run electron:dev    # requires gateway running
 dorabot --whatsapp-login    # scan the QR code
 ```
 
-Once linked, messages you receive on WhatsApp are forwarded to the agent. It replies using the same thread.
-
 ### Telegram
 
 1. Create a bot with [@BotFather](https://t.me/BotFather)
-2. Set the token:
-   ```bash
-   export TELEGRAM_BOT_TOKEN=your_token
-   ```
-3. Start the channel from the desktop app or via gateway RPC.
+2. Set `TELEGRAM_BOT_TOKEN=your_token` in your environment
+3. Start from the desktop app or config
 
-## Making It Yours
+### Desktop App
 
-### Workspace
+```bash
+cd desktop
+npm install
+npm run electron:dev
+```
 
-Edit these files in `~/.dorabot/workspace/` to shape the agent:
+## Make It Yours
 
-| File | What it does |
-|------|-------------|
-| `SOUL.md` | Personality, tone, how it should behave |
-| `USER.md` | Who you are, what you do, your preferences |
-| `MEMORY.md` | Facts the agent should always remember |
-| `AGENTS.md` | Extra instructions for the agent |
+Ask dorabot to onboard you.
+
+| File | Purpose |
+|------|---------|
+| `SOUL.md` | Personality and tone |
+| `USER.md` | Who you are, your preferences |
+| `MEMORY.md` | Persistent facts it should always remember |
+| `AGENTS.md` | Extra instructions |
 
 ### Skills
 
-Skills are markdown files that give the agent specialized knowledge. Built-in skills include GitHub, email, macOS commands, and meme generation.
-
-Add your own by dropping a `SKILL.md` in `~/.dorabot/skills/your-skill/`. The agent auto-discovers them and matches them to your prompts.
+Built-in skills include GitHub, email, macOS automation, image generation, and memes. Add your own by dropping a `SKILL.md` in `~/.dorabot/skills/your-skill/`.
 
 ### Config
 
-Config lives at `~/.dorabot/config.json` (or `./dorabot.config.json` locally).
+`~/.dorabot/config.json`:
 
 ```json
 {
@@ -116,14 +108,10 @@ Config lives at `~/.dorabot/config.json` (or `./dorabot.config.json` locally).
 
 ## Security
 
-- The agent can only access paths you allow (default: `~/`, `/tmp`)
-- Sensitive dirs are always blocked: `~/.ssh`, `~/.gnupg`, `~/.aws`
-- Gateway requires token auth for all connections
-- Tool approvals: auto-allow safe tools, require confirmation for sensitive ones
-
-## Tech Stack
-
-Node.js, TypeScript, Electron, React, Playwright, Baileys, grammy
+- Scoped file access (default: `~/`, `/tmp`)
+- Sensitive dirs always blocked: `~/.ssh`, `~/.gnupg`, `~/.aws`
+- Token-authenticated gateway
+- Configurable tool approval tiers
 
 ## License
 
