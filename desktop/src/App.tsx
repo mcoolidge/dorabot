@@ -244,14 +244,14 @@ export default function App() {
         <ResizableHandle withHandle />
 
         {/* main content */}
-        <ResizablePanel defaultSize={showFiles && activeTab !== 'board' ? "55%" : "85%"} minSize="30%" className="overflow-hidden min-w-0">
+        <ResizablePanel defaultSize={showFiles ? "55%" : "85%"} minSize="30%" className="overflow-hidden min-w-0">
           <div className="flex flex-col h-full min-h-0 min-w-0">
             {renderView()}
           </div>
         </ResizablePanel>
 
-        {/* file explorer — hidden on board tab (needs full width for columns) */}
-        {showFiles && activeTab !== 'board' && (
+        {/* file explorer */}
+        {showFiles && (
           <>
             <ResizableHandle withHandle />
             <ResizablePanel defaultSize="30%" minSize="15%" maxSize="45%" className="overflow-hidden flex flex-col">

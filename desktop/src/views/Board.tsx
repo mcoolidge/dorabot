@@ -21,7 +21,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 import { cn } from '@/lib/utils';
-import { Plus, X, Trash2, LayoutGrid, GripVertical } from 'lucide-react';
+import { Plus, X, Trash2, LayoutGrid, ChevronRight, Ban } from 'lucide-react';
 
 type BoardTask = {
   id: string;
@@ -41,11 +41,11 @@ type Props = {
   gateway: ReturnType<typeof useGateway>;
 };
 
-const COLUMNS: { id: BoardTask['status']; label: string }[] = [
-  { id: 'proposed', label: 'Proposed' },
-  { id: 'approved', label: 'Approved' },
-  { id: 'in_progress', label: 'In Progress' },
-  { id: 'done', label: 'Done' },
+const COLUMNS: { id: BoardTask['status']; label: string; bg: string; hoverColor: string }[] = [
+  { id: 'proposed', label: 'Proposed', bg: 'bg-amber-500/5', hoverColor: 'border-amber-500/40 bg-amber-500/10' },
+  { id: 'approved', label: 'Approved', bg: 'bg-blue-500/5', hoverColor: 'border-blue-500/40 bg-blue-500/10' },
+  { id: 'in_progress', label: 'In Progress', bg: 'bg-violet-500/5', hoverColor: 'border-violet-500/40 bg-violet-500/10' },
+  { id: 'done', label: 'Done', bg: 'bg-emerald-500/5', hoverColor: 'border-emerald-500/40 bg-emerald-500/10' },
 ];
 
 const PRIORITY_COLORS: Record<string, string> = {
@@ -56,11 +56,13 @@ const PRIORITY_COLORS: Record<string, string> = {
 
 // ── Droppable Column ──
 
-function KanbanColumn({ id, label, tasks, onDelete }: {
+function KanbanColumn({ id, label, tasks, onDelete, bg, hoverColor }: {
   id: string;
   label: string;
   tasks: BoardTask[];
   onDelete: (id: string) => void;
+  bg: string;
+  hoverColor: string;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id });
 
@@ -68,8 +70,8 @@ function KanbanColumn({ id, label, tasks, onDelete }: {
     <div
       ref={setNodeRef}
       className={cn(
-        'flex flex-col min-w-[220px] w-[220px] shrink-0 rounded-lg border border-border bg-secondary/30 transition-colors',
-        isOver && 'border-primary/50 bg-primary/5',
+        'flex flex-col flex-1 min-w-0 rounded-lg border border-border transition-colors',
+        isOver ? hoverColor : bg,
       )}
     >
       <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border shrink-0">
@@ -107,20 +109,15 @@ function KanbanCard({ task, onDelete, overlay }: {
   return (
     <div
       ref={overlay ? undefined : setNodeRef}
+      {...(overlay ? {} : listeners)}
+      {...(overlay ? {} : attributes)}
       className={cn(
-        'group rounded-md border border-border bg-card p-2 text-xs transition-shadow',
+        'group rounded-md border border-border bg-card p-2 text-xs transition-shadow cursor-grab active:cursor-grabbing',
         isDragging && 'opacity-30',
         overlay && 'shadow-lg border-primary/50 rotate-2',
       )}
     >
       <div className="flex items-start gap-1">
-        <button
-          {...listeners}
-          {...attributes}
-          className="shrink-0 mt-0.5 cursor-grab active:cursor-grabbing text-muted-foreground hover:text-foreground"
-        >
-          <GripVertical className="w-3 h-3" />
-        </button>
         <div className="flex-1 min-w-0">
           <div className="font-medium text-[11px] leading-tight">{task.title}</div>
           {task.description && (
@@ -173,6 +170,7 @@ export function BoardView({ gateway }: Props) {
   const [tasks, setTasks] = useState<BoardTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showRejected, setShowRejected] = useState(false);
   const [activeTask, setActiveTask] = useState<BoardTask | null>(null);
   const [newTask, setNewTask] = useState({
     title: '',
@@ -273,20 +271,21 @@ export function BoardView({ gateway }: Props) {
       <div className="p-4 space-y-3">
         <Skeleton className="h-8 w-48" />
         <div className="flex gap-3">
-          {COLUMNS.map(col => <Skeleton key={col.id} className="h-64 w-[220px]" />)}
+          {COLUMNS.map(col => <Skeleton key={col.id} className="h-64 flex-1" />)}
         </div>
       </div>
     );
   }
 
   const tasksByStatus = (status: string) => tasks.filter(t => t.status === status);
+  const rejectedTasks = tasksByStatus('rejected');
 
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* header */}
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
         <span className="font-semibold text-sm">Board</span>
-        <Badge variant="outline" className="text-[10px]">{tasks.length}</Badge>
+        <Badge variant="outline" className="text-[10px]">{tasks.filter(t => t.status !== 'rejected').length}</Badge>
         <Button
           variant={showAddForm ? 'outline' : 'default'}
           size="sm"
@@ -360,12 +359,14 @@ export function BoardView({ gateway }: Props) {
 
       {/* kanban columns */}
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-        <div className="flex gap-3 p-4 overflow-x-auto flex-1 min-h-0">
+        <div className="flex gap-3 p-4 flex-1 min-h-0">
           {COLUMNS.map(col => (
             <KanbanColumn
               key={col.id}
               id={col.id}
               label={col.label}
+              bg={col.bg}
+              hoverColor={col.hoverColor}
               tasks={tasksByStatus(col.id)}
               onDelete={deleteTask}
             />
@@ -375,6 +376,47 @@ export function BoardView({ gateway }: Props) {
           {activeTask && <KanbanCard task={activeTask} onDelete={() => {}} overlay />}
         </DragOverlay>
       </DndContext>
+
+      {/* rejected archive */}
+      {rejectedTasks.length > 0 && (
+        <div className="shrink-0 border-t border-border">
+          <button
+            className="flex items-center gap-1.5 w-full px-4 py-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+            onClick={() => setShowRejected(!showRejected)}
+          >
+            <ChevronRight className={cn('w-3 h-3 transition-transform', showRejected && 'rotate-90')} />
+            <Ban className="w-3 h-3" />
+            <span>Rejected</span>
+            <Badge variant="outline" className="text-[9px] h-4">{rejectedTasks.length}</Badge>
+          </button>
+          {showRejected && (
+            <div className="px-4 pb-3 flex flex-wrap gap-1.5">
+              {rejectedTasks.map(task => (
+                <div key={task.id} className="group flex items-center gap-1.5 rounded-md border border-border bg-card px-2 py-1 text-[10px] text-muted-foreground">
+                  <span className="line-through">#{task.id} {task.title}</span>
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <button className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity hover:text-destructive">
+                        <Trash2 className="w-2.5 h-2.5" />
+                      </button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle className="text-sm">delete "#{task.id} {task.title}"?</AlertDialogTitle>
+                        <AlertDialogDescription className="text-xs">this cannot be undone.</AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel className="h-7 text-xs">cancel</AlertDialogCancel>
+                        <AlertDialogAction className="h-7 text-xs" onClick={() => deleteTask(task.id)}>delete</AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -24,6 +24,7 @@ import { getDefaultAuthDir } from '../channels/whatsapp/session.js';
 import { validateTelegramToken } from '../channels/telegram/bot.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { setCronRunner } from '../tools/index.js';
+import { loadBoard, saveBoard, type BoardTask } from '../tools/board.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey } from '../providers/claude.js';
 import { isCodexInstalled, hasCodexAuth } from '../providers/codex.js';
@@ -969,6 +970,15 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             timestamp: Date.now(),
           },
         });
+
+        // broadcast board.update if agent used board tools
+        const tl = toolLogs.get(sessionKey);
+        if (tl) {
+          const allTools = [...tl.completed.map(t => t.name), tl.current?.name].filter(Boolean);
+          if (allTools.some(t => t?.startsWith('board_') || t?.startsWith('mcp__dorabot-tools__board_'))) {
+            broadcast({ event: 'board.update', data: {} });
+          }
+        }
       } catch (err) {
         console.error(`[gateway] agent error: source=${source}`, err);
         broadcast({
@@ -1307,6 +1317,83 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!jobId) return { id, error: 'id required' };
           const runResult = await cronRunner.runJobNow(jobId);
           return { id, result: runResult };
+        }
+
+        case 'board.list': {
+          const board = loadBoard();
+          return { id, result: board.tasks };
+        }
+
+        case 'board.add': {
+          const board = loadBoard();
+          const title = params?.title as string;
+          if (!title) return { id, error: 'title required' };
+          const now = new Date().toISOString();
+          const ids = board.tasks.map(t => parseInt(t.id, 10)).filter(n => !isNaN(n));
+          const newId = String((ids.length > 0 ? Math.max(...ids) : 0) + 1);
+          const source = (params?.source as string) || 'user';
+          const task: BoardTask = {
+            id: newId,
+            title,
+            description: params?.description as string | undefined,
+            status: (params?.status as BoardTask['status']) || (source === 'user' ? 'approved' : 'proposed'),
+            priority: (params?.priority as BoardTask['priority']) || 'medium',
+            source: source as 'agent' | 'user',
+            createdAt: now,
+            updatedAt: now,
+            tags: params?.tags as string[] | undefined,
+          };
+          board.tasks.push(task);
+          saveBoard(board);
+          broadcast({ event: 'board.update', data: {} });
+          return { id, result: task };
+        }
+
+        case 'board.update': {
+          const taskId = params?.id as string;
+          if (!taskId) return { id, error: 'id required' };
+          const board = loadBoard();
+          const task = board.tasks.find(t => t.id === taskId);
+          if (!task) return { id, error: 'task not found' };
+          const now = new Date().toISOString();
+          if (params?.status !== undefined) task.status = params.status as BoardTask['status'];
+          if (params?.title !== undefined) task.title = params.title as string;
+          if (params?.description !== undefined) task.description = params.description as string;
+          if (params?.priority !== undefined) task.priority = params.priority as BoardTask['priority'];
+          if (params?.result !== undefined) task.result = params.result as string;
+          if (params?.tags !== undefined) task.tags = params.tags as string[];
+          task.updatedAt = now;
+          if (task.status === 'done') task.completedAt = now;
+          saveBoard(board);
+          broadcast({ event: 'board.update', data: {} });
+          return { id, result: task };
+        }
+
+        case 'board.delete': {
+          const taskId = params?.id as string;
+          if (!taskId) return { id, error: 'id required' };
+          const board = loadBoard();
+          const before = board.tasks.length;
+          board.tasks = board.tasks.filter(t => t.id !== taskId);
+          if (board.tasks.length === before) return { id, error: 'task not found' };
+          saveBoard(board);
+          broadcast({ event: 'board.update', data: {} });
+          return { id, result: { deleted: true } };
+        }
+
+        case 'board.move': {
+          const taskId = params?.id as string;
+          const status = params?.status as string;
+          if (!taskId || !status) return { id, error: 'id and status required' };
+          const board = loadBoard();
+          const task = board.tasks.find(t => t.id === taskId);
+          if (!task) return { id, error: 'task not found' };
+          task.status = status as BoardTask['status'];
+          task.updatedAt = new Date().toISOString();
+          if (status === 'done') task.completedAt = task.updatedAt;
+          saveBoard(board);
+          broadcast({ event: 'board.update', data: {} });
+          return { id, result: task };
         }
 
         case 'heartbeat.status': {

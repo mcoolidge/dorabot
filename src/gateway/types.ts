@@ -78,6 +78,11 @@ export type RpcMethod =
   | 'cron.remove'
   | 'cron.toggle'
   | 'cron.run'
+  | 'board.list'
+  | 'board.add'
+  | 'board.update'
+  | 'board.delete'
+  | 'board.move'
   | 'heartbeat.status'
   | 'heartbeat.run'
   | 'skills.list'
@@ -110,6 +115,7 @@ export type GatewayEventName =
   | 'cron.result'
   | 'session.update'
   | 'status.update'
+  | 'board.update'
   | 'fs.change';
 
 export type GatewayContext = {
