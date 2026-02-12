@@ -290,6 +290,9 @@ export function useGateway(url = 'wss://localhost:18789') {
   const [whatsappQr, setWhatsappQr] = useState<string | null>(null);
   const [whatsappLoginStatus, setWhatsappLoginStatus] = useState<string>('unknown');
   const [whatsappLoginError, setWhatsappLoginError] = useState<string | null>(null);
+  const [telegramLinkStatus, setTelegramLinkStatus] = useState<string>('unknown');
+  const [telegramBotUsername, setTelegramBotUsername] = useState<string | null>(null);
+  const [telegramLinkError, setTelegramLinkError] = useState<string | null>(null);
   const [providerInfo, setProviderInfo] = useState<{ name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } } | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -562,6 +565,20 @@ export function useGateway(url = 'wss://localhost:18789') {
         }
         if (d.status === 'connected' || d.status === 'failed' || d.status === 'disconnected') {
           setWhatsappQr(null);
+        }
+        break;
+      }
+
+      case 'telegram.link_status': {
+        const d = data as { status: string; botUsername?: string };
+        if (d.status === 'linked') {
+          setTelegramLinkStatus('linked');
+          setTelegramBotUsername(d.botUsername || null);
+          setTelegramLinkError(null);
+        } else if (d.status === 'unlinked') {
+          setTelegramLinkStatus('unlinked');
+          setTelegramBotUsername(null);
+          setTelegramLinkError(null);
         }
         break;
       }
@@ -869,6 +886,44 @@ export function useGateway(url = 'wss://localhost:18789') {
     setWhatsappLoginError(null);
   }, [rpc]);
 
+  const telegramCheckStatus = useCallback(async () => {
+    const res = await rpc('channels.telegram.status') as { linked: boolean; botUsername: string | null };
+    setTelegramLinkStatus(res.linked ? 'linked' : 'unlinked');
+    setTelegramBotUsername(res.botUsername);
+    if (!res.linked) setTelegramLinkError(null);
+    return res;
+  }, [rpc]);
+
+  const telegramLink = useCallback(async (token: string) => {
+    setTelegramLinkStatus('linking');
+    setTelegramLinkError(null);
+    try {
+      const res = await rpc('channels.telegram.link', { token }, 15000) as {
+        success: boolean;
+        botId?: number;
+        botUsername?: string;
+        botName?: string;
+      };
+      if (res.success) {
+        setTelegramLinkStatus('linked');
+        setTelegramBotUsername(res.botUsername || null);
+      }
+      return res;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setTelegramLinkError(msg);
+      setTelegramLinkStatus('unlinked');
+      throw err;
+    }
+  }, [rpc]);
+
+  const telegramUnlink = useCallback(async () => {
+    await rpc('channels.telegram.unlink');
+    setTelegramLinkStatus('unlinked');
+    setTelegramBotUsername(null);
+    setTelegramLinkError(null);
+  }, [rpc]);
+
   // provider helpers
   const getProviderStatus = useCallback(async () => {
     const res = await rpc('provider.get') as { name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } };
@@ -972,6 +1027,12 @@ export function useGateway(url = 'wss://localhost:18789') {
     whatsappCheckStatus,
     whatsappLogin,
     whatsappLogout,
+    telegramLinkStatus,
+    telegramBotUsername,
+    telegramLinkError,
+    telegramCheckStatus,
+    telegramLink,
+    telegramUnlink,
     providerInfo,
     getProviderStatus,
     setProvider,

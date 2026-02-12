@@ -1,5 +1,6 @@
 import { createTelegramBot, resolveTelegramToken } from './bot.js';
 import { sendTelegramMessage, editTelegramMessage, deleteTelegramMessage } from './send.js';
+import { downloadTelegramFile } from './media.js';
 import { registerChannelHandler } from '../../tools/messaging.js';
 import type { InboundMessage } from '../types.js';
 import { InlineKeyboard, type Bot } from 'grammy';
@@ -128,44 +129,109 @@ export async function startTelegramMonitor(opts: TelegramMonitorOptions): Promis
     await ctx.answerCallbackQuery(approved ? 'Approved' : 'Denied');
   });
 
-  // handle incoming text messages
-  bot.on('message:text', async (ctx) => {
-    if (!opts.onMessage) return;
-
+  // shared auth + group check, returns null if message should be ignored
+  function checkAccess(ctx: { message?: { chat: { type: string; id: number }; from?: { id: number; first_name?: string; last_name?: string; username?: string } } }) {
+    if (!opts.onMessage) return null;
     const msg = ctx.message;
+    if (!msg) return null;
     const chat = msg.chat;
     const isGroup = chat.type === 'group' || chat.type === 'supergroup';
-
-    // group policy check
-    if (isGroup && opts.groupPolicy === 'disabled') return;
-
-    // sender auth check
+    if (isGroup && opts.groupPolicy === 'disabled') return null;
     const senderId = String(msg.from?.id || '');
     if (opts.allowFrom && opts.allowFrom.length > 0) {
       if (!opts.allowFrom.includes(senderId)) {
         console.log(`[telegram] unauthorized sender: ${senderId} (${msg.from?.first_name || 'unknown'})`);
-        return;
+        return null;
       }
     }
+    return { chat, isGroup, senderId };
+  }
 
-    const inbound: InboundMessage = {
+  function buildInbound(msg: any, isGroup: boolean, body: string): InboundMessage {
+    return {
       id: String(msg.message_id),
       channel: 'telegram',
       accountId: opts.accountId || '',
-      chatId: String(chat.id),
+      chatId: String(msg.chat.id),
       chatType: isGroup ? 'group' : 'dm',
       senderId: String(msg.from?.id || ''),
       senderName: msg.from?.first_name
         ? `${msg.from.first_name}${msg.from.last_name ? ` ${msg.from.last_name}` : ''}`
         : msg.from?.username,
-      body: msg.text,
+      body,
       timestamp: msg.date * 1000,
       replyToId: msg.reply_to_message ? String(msg.reply_to_message.message_id) : undefined,
       raw: msg,
     };
+  }
 
-    await opts.onMessage(inbound);
+  // handle incoming text messages
+  bot.on('message:text', async (ctx) => {
+    const access = checkAccess(ctx);
+    if (!access) return;
+
+    const inbound = buildInbound(ctx.message, access.isGroup, ctx.message.text);
+    await opts.onMessage!(inbound);
   });
+
+  // handle incoming media messages (photo, video, audio, document, voice, animation, video_note)
+  for (const mediaType of ['photo', 'video', 'audio', 'document', 'voice', 'animation', 'video_note'] as const) {
+    bot.on(`message:${mediaType}`, async (ctx) => {
+      const access = checkAccess(ctx);
+      if (!access) return;
+
+      const msg = ctx.message as any;
+      const caption = msg.caption || '';
+
+      // resolve file_id based on media type
+      let fileId: string;
+      let fallbackExt: string;
+      let fallbackMime: string | undefined;
+
+      if (mediaType === 'photo') {
+        // photos come as array of sizes — pick the largest
+        const sizes = msg.photo;
+        fileId = sizes[sizes.length - 1].file_id;
+        fallbackExt = 'jpg';
+        fallbackMime = 'image/jpeg';
+      } else if (mediaType === 'voice') {
+        fileId = msg.voice.file_id;
+        fallbackExt = 'ogg';
+        fallbackMime = msg.voice.mime_type;
+      } else if (mediaType === 'video_note') {
+        fileId = msg.video_note.file_id;
+        fallbackExt = 'mp4';
+        fallbackMime = 'video/mp4';
+      } else if (mediaType === 'animation') {
+        fileId = msg.animation.file_id;
+        fallbackExt = 'mp4';
+        fallbackMime = msg.animation.mime_type;
+      } else {
+        // video, audio, document — all have file_id and optional mime_type
+        const media = msg[mediaType];
+        fileId = media.file_id;
+        fallbackExt = mediaType === 'video' ? 'mp4' : mediaType === 'audio' ? 'mp3' : 'bin';
+        fallbackMime = media.mime_type;
+      }
+
+      try {
+        const { path, mimeType } = await downloadTelegramFile(bot.api, fileId, fallbackExt, fallbackMime);
+        console.log(`[telegram] downloaded ${mediaType}: ${path} (${mimeType})`);
+
+        const inbound = buildInbound(msg, access.isGroup, caption);
+        inbound.mediaPath = path;
+        inbound.mediaType = mimeType;
+        await opts.onMessage!(inbound);
+      } catch (err) {
+        console.error(`[telegram] failed to download ${mediaType}:`, err);
+        // still forward the message with caption if download fails
+        if (caption) {
+          const inbound = buildInbound(msg, access.isGroup, caption);
+          await opts.onMessage!(inbound);
+        }
+      }
+    });
+  }
 
   // start long polling via runner (non-blocking)
   let runner: RunnerHandle;

@@ -27,3 +27,15 @@ export function resolveTelegramToken(tokenFile?: string): string {
 export function createTelegramBot(opts: CreateBotOptions): Bot {
   return new Bot(opts.token);
 }
+
+export type TelegramBotInfo = {
+  id: number;
+  username: string;
+  firstName: string;
+};
+
+export async function validateTelegramToken(token: string): Promise<TelegramBotInfo> {
+  const bot = new Bot(token);
+  const me = await bot.api.getMe();
+  return { id: me.id, username: me.username || '', firstName: me.first_name };
+}

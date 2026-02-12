@@ -8,7 +8,8 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { FocusCards } from '@/components/aceternity/focus-cards';
 import { QRCodeSVG } from 'qrcode.react';
-import { Loader2, LogOut, Smartphone } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Eye, EyeOff, Loader2, LogOut, Smartphone } from 'lucide-react';
 
 type Props = {
   channel: 'whatsapp' | 'telegram';
@@ -136,6 +137,151 @@ function WhatsAppSetup({ gateway }: { gateway: ReturnType<typeof useGateway> }) 
   );
 }
 
+function TelegramSetup({ gateway }: { gateway: ReturnType<typeof useGateway> }) {
+  const [tokenInput, setTokenInput] = useState('');
+  const [showToken, setShowToken] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [linking, setLinking] = useState(false);
+
+  const linkStatus = gateway.telegramLinkStatus;
+  const botUsername = gateway.telegramBotUsername;
+  const error = localError || gateway.telegramLinkError;
+
+  useEffect(() => {
+    gateway.telegramCheckStatus().catch(() => {});
+  }, [gateway.telegramCheckStatus]);
+
+  const handleLink = async () => {
+    if (!tokenInput.trim()) return;
+    setLocalError(null);
+    setLinking(true);
+    try {
+      const res = await gateway.telegramLink(tokenInput.trim());
+      if (res.success) {
+        setTokenInput('');
+      }
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLinking(false);
+    }
+  };
+
+  const handleUnlink = async () => {
+    setLocalError(null);
+    try {
+      await gateway.telegramUnlink();
+    } catch (err) {
+      setLocalError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  // linked
+  if (linkStatus === 'linked') {
+    return (
+      <Card className="mb-3">
+        <CardContent className="p-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <img src="/telegram.png" className="w-3.5 h-3.5" alt="" />
+              <span className="text-xs font-semibold">Telegram linked</span>
+              {botUsername && (
+                <span className="text-[11px] text-muted-foreground">{botUsername}</span>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-[11px] text-destructive hover:text-destructive px-2"
+              onClick={handleUnlink}
+            >
+              <LogOut className="w-3 h-3 mr-1" />unlink
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // validating token
+  if (linkStatus === 'linking' || linking) {
+    return (
+      <Card className="mb-3">
+        <CardContent className="p-4">
+          <div className="flex flex-col items-center gap-2 py-4">
+            <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+            <span className="text-xs text-muted-foreground">validating token...</span>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  // not linked
+  return (
+    <Card className="mb-3">
+      <CardContent className="p-4">
+        <div className="flex flex-col gap-4 py-2">
+          <div className="flex flex-col items-center gap-2">
+            <img src="/telegram.png" className="w-8 h-8 opacity-40" alt="" />
+            <div className="text-center space-y-1">
+              <div className="text-sm font-semibold">set up Telegram</div>
+              <div className="text-[10px] text-muted-foreground">
+                link a Telegram bot to send and receive messages
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-secondary/50 rounded-lg p-3 space-y-1.5">
+            <div className="text-[11px] font-semibold">get a bot token from BotFather</div>
+            <ol className="text-[10px] text-muted-foreground space-y-1 list-decimal list-inside">
+              <li>open Telegram and search for <code className="text-foreground">@BotFather</code></li>
+              <li>send <code className="text-foreground">/newbot</code></li>
+              <li>choose a name and username (must end in <code className="text-foreground">bot</code>)</li>
+              <li>copy the API token below</li>
+            </ol>
+          </div>
+
+          <div className="space-y-2">
+            <div className="relative">
+              <Input
+                type={showToken ? 'text' : 'password'}
+                placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v..."
+                value={tokenInput}
+                onChange={e => setTokenInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleLink()}
+                className="h-8 text-xs pr-8 font-mono"
+              />
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={() => setShowToken(!showToken)}
+              >
+                {showToken
+                  ? <EyeOff className="w-3.5 h-3.5" />
+                  : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+
+            {error && (
+              <div className="text-[11px] text-destructive">{error}</div>
+            )}
+
+            <Button
+              size="sm"
+              className="h-8 text-xs px-4 w-full"
+              onClick={handleLink}
+              disabled={!tokenInput.trim()}
+            >
+              link Telegram
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function ChannelView({ channel, gateway, onViewSession, onSwitchChannel }: Props) {
   const status = gateway.channelStatuses.find(s => s.channel === channel);
   const messages = useMemo(
@@ -208,6 +354,7 @@ export function ChannelView({ channel, gateway, onViewSession, onSwitchChannel }
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-4 space-y-4">
           {channel === 'whatsapp' && <WhatsAppSetup gateway={gateway} />}
+          {channel === 'telegram' && <TelegramSetup gateway={gateway} />}
 
           <ChannelSecurity channel={channel} gateway={gateway} />
 

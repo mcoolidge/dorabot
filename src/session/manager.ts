@@ -30,6 +30,7 @@ export type MessageMetadata = {
   body?: string;
   replyToId?: string;
   mediaType?: string;
+  mediaPath?: string;
   tools?: string[];
   usage?: { inputTokens: number; outputTokens: number; totalCostUsd: number };
   durationMs?: number;
