@@ -158,29 +158,34 @@ export function useLayout() {
 
   // Remove a tab from whichever group owns it
   const removeTabFromGroup = useCallback((tabId: string): { groupId: GroupId; wasActive: boolean; neighborTabId: string | null } => {
-    let result = { groupId: 'g0' as GroupId, wasActive: false, neighborTabId: null as string | null };
-    setState(prev => {
-      const groups = prev.groups.map(g => {
-        const idx = g.tabIds.indexOf(tabId);
-        if (idx < 0) return g;
+    // Compute result from current state BEFORE queuing the update
+    // (setState updaters may not run synchronously in React 18)
+    const group = state.groups.find(g => g.tabIds.includes(tabId));
+    if (!group) return { groupId: 'g0' as GroupId, wasActive: false, neighborTabId: null };
 
-        const wasActive = g.activeTabId === tabId;
-        const newTabIds = g.tabIds.filter(id => id !== tabId);
-        const neighborIdx = Math.min(idx, newTabIds.length - 1);
-        const neighborTabId = newTabIds[neighborIdx] || null;
+    const idx = group.tabIds.indexOf(tabId);
+    const wasActive = group.activeTabId === tabId;
+    const newTabIds = group.tabIds.filter(id => id !== tabId);
+    const neighborIdx = Math.min(idx, newTabIds.length - 1);
+    const neighborTabId = newTabIds[neighborIdx] || null;
 
-        result = { groupId: g.id, wasActive, neighborTabId };
-
+    setState(prev => ({
+      ...prev,
+      groups: prev.groups.map(g => {
+        if (!g.tabIds.includes(tabId)) return g;
+        const filtered = g.tabIds.filter(id => id !== tabId);
         return {
           ...g,
-          tabIds: newTabIds,
-          activeTabId: wasActive ? neighborTabId : g.activeTabId,
+          tabIds: filtered,
+          activeTabId: g.activeTabId === tabId
+            ? (filtered[Math.min(g.tabIds.indexOf(tabId), filtered.length - 1)] || null)
+            : g.activeTabId,
         };
-      });
-      return { ...prev, groups };
-    });
-    return result;
-  }, []);
+      }),
+    }));
+
+    return { groupId: group.id, wasActive, neighborTabId };
+  }, [state.groups]);
 
   // Set a group's active tab
   const setGroupActiveTab = useCallback((groupId: GroupId, tabId: string) => {
