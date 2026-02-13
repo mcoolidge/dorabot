@@ -24,8 +24,13 @@ export async function getProviderByName(name: string): Promise<Provider> {
         providers.set(name, new CodexProvider());
         break;
       }
+      case 'minimax': {
+        const { MiniMaxProvider } = await import('./minimax.js');
+        providers.set(name, new MiniMaxProvider());
+        break;
+      }
       default:
-        throw new Error(`Unknown provider: ${name}. Supported: claude, codex`);
+        throw new Error(`Unknown provider: ${name}. Supported: claude, codex, minimax`);
     }
   }
   return providers.get(name)!;

@@ -116,7 +116,7 @@ export type SecurityConfig = {
   tools?: ToolPolicyConfig;
 };
 
-export type ProviderName = 'claude' | 'codex';
+export type ProviderName = 'claude' | 'codex' | 'minimax';
 
 export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'max';
 
@@ -133,9 +133,15 @@ export type CodexProviderConfig = {
   webSearch?: CodexWebSearchMode;
 };
 
+export type MiniMaxProviderConfig = {
+  model?: string;
+  baseUrl?: string;
+};
+
 export type ProviderConfig = {
   name: ProviderName;
   codex?: CodexProviderConfig;
+  minimax?: MiniMaxProviderConfig;
 };
 
 export type Config = {
@@ -253,6 +259,7 @@ export const ALWAYS_DENIED = [
   '~/.dorabot/whatsapp/auth',
   '~/.dorabot/gateway-token',
   '~/.dorabot/codex-auth.json',
+  '~/.dorabot/.minimax-key',
   '~/.dorabot/tls',
   '~/.config/nanoclaw',
 ];
