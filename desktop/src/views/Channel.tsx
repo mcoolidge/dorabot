@@ -14,7 +14,7 @@ import { Eye, EyeOff, Loader2, LogOut, Smartphone } from 'lucide-react';
 type Props = {
   channel: 'whatsapp' | 'telegram';
   gateway: ReturnType<typeof useGateway>;
-  onViewSession?: (sessionId: string, channel?: string, chatId?: string) => void;
+  onViewSession?: (sessionId: string, channel?: string, chatId?: string, chatType?: string) => void;
   onSwitchChannel?: (channel: 'whatsapp' | 'telegram') => void;
 };
 
@@ -378,7 +378,7 @@ export function ChannelView({ channel, gateway, onViewSession, onSwitchChannel }
                   <Card
                     key={s.id}
                     className="cursor-pointer hover:border-primary/50 transition-colors"
-                    onClick={() => onViewSession?.(s.id, s.channel, s.chatId)}
+                    onClick={() => onViewSession?.(s.id, s.channel, s.chatId, s.chatType)}
                   >
                     <CardContent className="p-3">
                       <div className="text-primary text-xs font-semibold">

@@ -318,6 +318,8 @@ export function useGateway(url = 'wss://localhost:18789') {
   const fsChangeListenersRef = useRef<Set<(path: string) => void>>(new Set());
   // track which session key we're viewing - only show stream events for this key
   const activeSessionKeyRef = useRef<string>('desktop:dm:default');
+  // track the current desktop chatId so we can pass it to chat.send
+  const currentChatIdRef = useRef<string>(`task-${Date.now()}`);
 
   const rpc = useCallback(async (method: string, params?: Record<string, unknown>, timeoutMs = 30000): Promise<unknown> => {
     const ws = wsRef.current;
@@ -695,7 +697,15 @@ export function useGateway(url = 'wss://localhost:18789') {
                   setChatItems(sessionMessagesToChatItems(r.messages));
                   setCurrentSessionId(savedSession);
                   // restore registry so conversation continues after reconnect
-                  rpc('sessions.resume', { sessionId: savedSession }).catch(() => {});
+                  rpc('sessions.resume', { sessionId: savedSession }).then((resumeRes) => {
+                    const rr = resumeRes as { key?: string } | undefined;
+                    if (rr?.key) {
+                      activeSessionKeyRef.current = rr.key;
+                      // extract chatId from key (channel:chatType:chatId)
+                      const parts = rr.key.split(':');
+                      if (parts.length >= 3) currentChatIdRef.current = parts.slice(2).join(':');
+                    }
+                  }).catch(() => {});
                 }
               }).catch(() => {
                 localStorage.removeItem(SESSION_STORAGE_KEY);
@@ -776,7 +786,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     // don't override status if already running (injection case)
     setAgentStatus(prev => prev === 'idle' ? 'thinking...' : prev);
     try {
-      await rpc('chat.send', { prompt });
+      await rpc('chat.send', { prompt, chatId: currentChatIdRef.current });
     } catch (err) {
       setChatItems(prev => [...prev, {
         type: 'error',
@@ -787,7 +797,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     }
   }, [rpc]);
 
-  const loadSession = useCallback(async (sessionId: string, sessionKey?: string) => {
+  const loadSession = useCallback(async (sessionId: string, sessionKey?: string, chatId?: string) => {
     try {
       const res = await rpc('sessions.get', { sessionId }) as { sessionId: string; messages: SessionMessage[] };
       if (res?.messages) {
@@ -795,6 +805,8 @@ export function useGateway(url = 'wss://localhost:18789') {
         setChatItems(items);
         setCurrentSessionId(sessionId);
         activeSessionKeyRef.current = sessionKey || 'desktop:dm:default';
+        // keep chatId ref in sync so sendMessage targets the right session
+        if (chatId) currentChatIdRef.current = chatId;
         localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
         // restore registry entry so next chat.send continues this conversation
         rpc('sessions.resume', { sessionId }).catch((err: unknown) => {
@@ -840,20 +852,21 @@ export function useGateway(url = 'wss://localhost:18789') {
 
   const abortAgent = useCallback(async () => {
     try {
-      await rpc('agent.abort', {});
+      await rpc('agent.abort', { sessionKey: activeSessionKeyRef.current });
     } catch (err) {
       console.error('failed to abort:', err);
     }
   }, [rpc]);
 
   const newSession = useCallback(() => {
+    const newChatId = `task-${Date.now()}`;
+    currentChatIdRef.current = newChatId;
+    activeSessionKeyRef.current = `desktop:dm:${newChatId}`;
     setCurrentSessionId(undefined);
     setChatItems([]);
-    activeSessionKeyRef.current = 'desktop:dm:default';
+    setAgentStatus('idle');
     localStorage.removeItem(SESSION_STORAGE_KEY);
-    // reset session in gateway so next chat.send starts fresh
-    rpc('sessions.reset', { channel: 'desktop', chatId: 'default' }).catch(() => {});
-  }, [rpc]);
+  }, []);
 
   const changeModel = useCallback(async (newModel: string) => {
     await rpc('config.set', { key: 'model', value: newModel });

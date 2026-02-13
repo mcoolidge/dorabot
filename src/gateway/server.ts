@@ -1187,10 +1187,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const prompt = params?.prompt as string;
           if (!prompt) return { id, error: 'prompt required' };
 
-          const sessionKey = 'desktop:dm:default';
+          const chatId = (params?.chatId as string) || `task-${Date.now()}`;
+          const sessionKey = `desktop:dm:${chatId}`;
           let session = sessionRegistry.getOrCreate({
             channel: 'desktop',
-            chatId: 'default',
+            chatId,
           });
 
           // idle timeout: reset session if too long since last message
@@ -1199,11 +1200,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             console.log(`[gateway] idle timeout for ${session.key} (${Math.floor(desktopGap / 3600000)}h), starting new session`);
             fileSessionManager.setMetadata(session.sessionId, { sdkSessionId: undefined });
             sessionRegistry.remove(session.key);
-            session = sessionRegistry.getOrCreate({ channel: 'desktop', chatId: 'default' });
+            session = sessionRegistry.getOrCreate({ channel: 'desktop', chatId });
           }
 
           sessionRegistry.incrementMessages(session.key);
-          fileSessionManager.setMetadata(session.sessionId, { channel: 'desktop', chatId: 'default', chatType: 'dm' });
+          fileSessionManager.setMetadata(session.sessionId, { channel: 'desktop', chatId, chatType: 'dm' });
           broadcastSessionUpdate(sessionKey);
 
           // try injection into active run first
@@ -1233,7 +1234,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         }
 
         case 'agent.abort': {
-          const sk = (params?.sessionKey as string) || 'desktop:dm:default';
+          const sk = params?.sessionKey as string;
+          if (!sk) return { id, error: 'sessionKey required' };
           const ac = activeAbortControllers.get(sk);
           if (!ac) return { id, error: 'no active run for that session' };
           ac.abort();

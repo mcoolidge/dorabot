@@ -74,11 +74,12 @@ export default function App() {
     return gw.sessions.filter(s => (s.channel || 'desktop') === sessionFilter);
   }, [gw.sessions, sessionFilter]);
 
-  const handleViewSession = (sessionId: string, channel?: string, chatId?: string) => {
-    const sessionKey = channel && chatId
-      ? `${channel}:dm:${chatId}`
-      : 'desktop:dm:default';
-    gw.loadSession(sessionId, sessionKey);
+  const handleViewSession = (sessionId: string, channel?: string, chatId?: string, chatType?: string) => {
+    const ch = channel || 'desktop';
+    const ct = chatType || 'dm';
+    const cid = chatId || 'default';
+    const sessionKey = `${ch}:${ct}:${cid}`;
+    gw.loadSession(sessionId, sessionKey, cid);
     setActiveTab('chat');
   };
 
@@ -213,7 +214,7 @@ export default function App() {
                           ? 'bg-secondary text-foreground'
                           : 'text-muted-foreground hover:bg-secondary/50'
                       }`}
-                      onClick={() => handleViewSession(s.id, s.channel, s.chatId)}
+                      onClick={() => handleViewSession(s.id, s.channel, s.chatId, s.chatType)}
                       title={`${s.channel || 'desktop'} | ${s.messageCount} msgs | ${new Date(s.updatedAt).toLocaleString()}`}
                     >
                       <span className="w-3 h-3 shrink-0 flex items-center justify-center">{channelIcon(s.channel)}</span>
