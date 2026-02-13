@@ -110,22 +110,16 @@ function KanbanCard({ task, onDelete, onView, overlay }: {
     data: task,
   });
 
-  // track mouse down position to distinguish click from drag
-  const mouseDownPos = useState<{ x: number; y: number } | null>(null);
-
   return (
     <div
       ref={overlay ? undefined : setNodeRef}
       {...(overlay ? {} : listeners)}
       {...(overlay ? {} : attributes)}
-      onPointerDown={e => { mouseDownPos[1]({ x: e.clientX, y: e.clientY }); }}
-      onPointerUp={e => {
-        const down = mouseDownPos[0];
-        if (down && onView) {
-          const dist = Math.hypot(e.clientX - down.x, e.clientY - down.y);
-          if (dist < 5) onView(task);
+      onClick={e => {
+        // only open detail view if clicking the card body, not the trash button or its dialog
+        if (onView && !(e.target as HTMLElement).closest('[data-delete-trigger]')) {
+          onView(task);
         }
-        mouseDownPos[1](null);
       }}
       className={cn(
         'group rounded-md border border-border bg-card p-2 text-xs transition-shadow cursor-grab active:cursor-grabbing',
@@ -161,14 +155,14 @@ function KanbanCard({ task, onDelete, onView, overlay }: {
         <AlertDialog>
           <AlertDialogTrigger asChild>
             <button
+              data-delete-trigger
               className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
               onPointerDown={e => e.stopPropagation()}
-              onPointerUp={e => e.stopPropagation()}
             >
               <Trash2 className="w-3 h-3" />
             </button>
           </AlertDialogTrigger>
-          <AlertDialogContent>
+          <AlertDialogContent onClick={e => e.stopPropagation()}>
             <AlertDialogHeader>
               <AlertDialogTitle className="text-sm">delete "#{task.id} {task.title}"?</AlertDialogTitle>
               <AlertDialogDescription className="text-xs">this cannot be undone.</AlertDialogDescription>
@@ -494,23 +488,14 @@ export function BoardView({ gateway }: Props) {
               </div>
 
               <div className="flex justify-end gap-2 pt-1">
-                <AlertDialog>
-                  <AlertDialogTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-7 text-xs text-destructive hover:text-destructive">
-                      <Trash2 className="w-3 h-3 mr-1" />delete
-                    </Button>
-                  </AlertDialogTrigger>
-                  <AlertDialogContent>
-                    <AlertDialogHeader>
-                      <AlertDialogTitle className="text-sm">delete "#{viewTask.id} {viewTask.title}"?</AlertDialogTitle>
-                      <AlertDialogDescription className="text-xs">this cannot be undone.</AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel className="h-7 text-xs">cancel</AlertDialogCancel>
-                      <AlertDialogAction className="h-7 text-xs" onClick={() => { deleteTask(viewTask.id); setViewTask(null); }}>delete</AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs text-destructive hover:text-destructive"
+                  onClick={() => { deleteTask(viewTask.id); setViewTask(null); }}
+                >
+                  <Trash2 className="w-3 h-3 mr-1" />delete
+                </Button>
                 <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setViewTask(null)}>close</Button>
               </div>
             </>
