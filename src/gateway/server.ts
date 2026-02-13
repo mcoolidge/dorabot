@@ -34,7 +34,7 @@ import { randomUUID, randomBytes } from 'node:crypto';
 import { classifyToolCall, cleanToolName, isToolAllowed, type Tier } from './tool-policy.js';
 
 const DEFAULT_PORT = 18789;
-const DEFAULT_HOST = 'localhost';
+const DEFAULT_HOST = '127.0.0.1';
 
 const TOOL_EMOJI: Record<string, string> = {
   Read: '\ud83d\udcc4', Write: '\ud83d\udcdd', Edit: '\u270f\ufe0f',
@@ -2552,7 +2552,25 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     });
   });
 
-  await new Promise<void>((resolve) => {
+  await new Promise<void>((resolve, reject) => {
+    httpServer.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        console.log(`[gateway] port ${port} in use, killing stale process...`);
+        import('node:child_process').then(({ execSync }) => {
+          try {
+            execSync(`kill $(netstat -anv -p tcp 2>/dev/null | awk '/:${port} .* LISTEN/{print $9}') 2>/dev/null`);
+          } catch {}
+          setTimeout(() => {
+            httpServer.listen(port, host, () => {
+              console.log(`[gateway] listening on ${useTls ? 'wss' : 'ws'}://${host}:${port}`);
+              resolve();
+            });
+          }, 500);
+        });
+      } else {
+        reject(err);
+      }
+    });
     httpServer.listen(port, host, () => {
       console.log(`[gateway] listening on ${useTls ? 'wss' : 'ws'}://${host}:${port}`);
       resolve();

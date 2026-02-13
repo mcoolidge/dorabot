@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "dev": "(kill $(lsof -ti :18789) 2>/dev/null; trap 'kill 0' SIGINT; tsx watch src/index.ts -g & npm -C desktop run dev)",
+    "dev": "(kill $(netstat -anv -p tcp 2>/dev/null | awk '/:18789 .* LISTEN/{print $9}') 2>/dev/null; trap 'kill 0' SIGINT; tsx watch src/index.ts -g & npm -C desktop run dev)",
     "dev:gateway": "tsx watch src/index.ts -g",
     "dev:cli": "tsx src/index.ts -i",
     "dev:desktop": "npm -C desktop run dev",
