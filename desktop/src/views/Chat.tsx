@@ -184,8 +184,9 @@ function ToolUseItem({ item }: { item: Extract<ChatItem, { type: 'tool_use' }> }
   const displayName = toolText(item.name, isPending ? 'pending' : 'done');
   const useStreamCard = hasStreamCard(item.name);
 
-  // auto-collapse when done streaming, but let user override
-  const isOpen = manualOpen !== null ? manualOpen : isPending;
+  // Read/Grep/Glob are fast — start collapsed to avoid flicker
+  const startCollapsed = item.name === 'Read' || item.name === 'Grep' || item.name === 'Glob';
+  const isOpen = manualOpen !== null ? manualOpen : (isPending && !startCollapsed);
 
   const inputDetail = (() => {
     const p = safeParse(item.input);

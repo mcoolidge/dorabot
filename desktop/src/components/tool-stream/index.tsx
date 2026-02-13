@@ -10,7 +10,6 @@ import { CronStream } from "./CronStream"
 import { GoalsStream } from "./GoalsStream"
 import { WebFetchStream } from "./WebFetchStream"
 import { TaskStream } from "./TaskStream"
-// ProgressStream and QuestionStream no longer used as stream cards
 
 const STREAM_MAP: Record<string, React.ComponentType<ToolUIProps>> = {
   browser: BrowserStream,
@@ -19,11 +18,8 @@ const STREAM_MAP: Record<string, React.ComponentType<ToolUIProps>> = {
   WebSearch: SearchStream,
   WebFetch: WebFetchStream,
   screenshot: ScreenshotStream,
-  Read: FileStream,
   Write: FileStream,
   Edit: FileStream,
-  Glob: FileStream,
-  Grep: FileStream,
   Task: TaskStream,
   schedule_reminder: CronStream,
   schedule_recurring: CronStream,
