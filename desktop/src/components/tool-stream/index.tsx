@@ -1,3 +1,4 @@
+import { motion } from "motion/react"
 import type { ToolUIProps } from "../tool-ui"
 import { BrowserStream } from "./BrowserStream"
 import { TerminalStream } from "./TerminalStream"
@@ -38,10 +39,29 @@ const STREAM_MAP: Record<string, React.ComponentType<ToolUIProps>> = {
   AskUserQuestion: QuestionStream,
 }
 
+function StreamProgress() {
+  return (
+    <div className="absolute bottom-0 left-0 right-0 h-[2px] overflow-hidden z-20 rounded-b-lg">
+      <motion.div
+        className="h-full bg-gradient-to-r from-transparent via-primary/50 to-transparent"
+        style={{ width: "40%" }}
+        initial={{ x: "-100%" }}
+        animate={{ x: "250%" }}
+        transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
+      />
+    </div>
+  )
+}
+
 export function ToolStreamCard(props: ToolUIProps) {
   const Component = STREAM_MAP[props.name]
   if (!Component) return null
-  return <Component {...props} />
+  return (
+    <div className="relative">
+      <Component {...props} />
+      {props.streaming && <StreamProgress />}
+    </div>
+  )
 }
 
 export function hasStreamCard(toolName: string): boolean {

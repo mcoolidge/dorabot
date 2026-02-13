@@ -435,6 +435,84 @@ export function BoardView({ gateway }: Props) {
           )}
         </div>
       )}
+
+      {/* task detail dialog */}
+      <Dialog open={!!viewTask} onOpenChange={open => { if (!open) setViewTask(null); }}>
+        <DialogContent className="sm:max-w-md">
+          {viewTask && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="text-sm flex items-center gap-2">
+                  <span className="text-muted-foreground font-normal">#{viewTask.id}</span>
+                  {viewTask.title}
+                </DialogTitle>
+                <DialogDescription asChild>
+                  <div className="flex items-center gap-1.5 pt-1">
+                    <Badge variant="outline" className="text-[9px] h-4">{viewTask.status.replace('_', ' ')}</Badge>
+                    {viewTask.priority !== 'medium' && (
+                      <Badge className={cn('text-[8px] h-3.5 px-1', PRIORITY_COLORS[viewTask.priority])}>
+                        {viewTask.priority}
+                      </Badge>
+                    )}
+                    <Badge variant="outline" className="text-[9px] h-4 gap-0.5">
+                      {viewTask.source === 'agent' ? <Bot className="w-2.5 h-2.5" /> : <User className="w-2.5 h-2.5" />}
+                      {viewTask.source}
+                    </Badge>
+                    {viewTask.tags?.map(tag => (
+                      <Badge key={tag} variant="outline" className="text-[9px] h-4">{tag}</Badge>
+                    ))}
+                  </div>
+                </DialogDescription>
+              </DialogHeader>
+
+              {viewTask.description && (
+                <>
+                  <Separator />
+                  <div className="text-xs text-foreground/80 whitespace-pre-wrap">{viewTask.description}</div>
+                </>
+              )}
+
+              {viewTask.result && (
+                <>
+                  <Separator />
+                  <div>
+                    <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">result</div>
+                    <div className="text-xs text-foreground/80 whitespace-pre-wrap">{viewTask.result}</div>
+                  </div>
+                </>
+              )}
+
+              <Separator />
+              <div className="grid grid-cols-2 gap-2 text-[10px] text-muted-foreground">
+                <div>created: {new Date(viewTask.createdAt).toLocaleString()}</div>
+                <div>updated: {new Date(viewTask.updatedAt).toLocaleString()}</div>
+                {viewTask.completedAt && <div className="col-span-2">completed: {new Date(viewTask.completedAt).toLocaleString()}</div>}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="outline" size="sm" className="h-7 text-xs text-destructive hover:text-destructive">
+                      <Trash2 className="w-3 h-3 mr-1" />delete
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle className="text-sm">delete "#{viewTask.id} {viewTask.title}"?</AlertDialogTitle>
+                      <AlertDialogDescription className="text-xs">this cannot be undone.</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel className="h-7 text-xs">cancel</AlertDialogCancel>
+                      <AlertDialogAction className="h-7 text-xs" onClick={() => { deleteTask(viewTask.id); setViewTask(null); }}>delete</AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setViewTask(null)}>close</Button>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
