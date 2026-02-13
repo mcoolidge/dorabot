@@ -232,6 +232,15 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   // active RunHandles for message injection into running agent sessions
   const runHandles = new Map<string, RunHandle>();
 
+  // per-session channel context so the stream loop can manage status messages
+  type ChannelRunContext = {
+    channel: string;
+    chatId: string;
+    statusMsgId?: string;
+    typingInterval?: ReturnType<typeof setInterval>;
+  };
+  const channelRunContexts = new Map<string, ChannelRunContext>();
+
   // background runs state
   type BackgroundRun = {
     id: string; sessionKey: string; prompt: string;
@@ -242,6 +251,29 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
   // guard against overlapping WhatsApp login attempts
   let whatsappLoginInProgress = false;
+
+  // set up channel status message + typing for a session key
+  function setupChannelStatus(sessionKey: string, channel: string, chatId: string) {
+    const handler = getChannelHandler(channel);
+    if (!handler) return;
+
+    const ctx: ChannelRunContext = { channel, chatId };
+    channelRunContexts.set(sessionKey, ctx);
+
+    (async () => {
+      try {
+        if (handler.typing) handler.typing(chatId).catch(() => {});
+        const sent = await handler.send(chatId, 'thinking...');
+        ctx.statusMsgId = sent.id;
+        statusMessages.set(sessionKey, { channel, chatId, messageId: sent.id });
+      } catch {}
+      if (handler.typing) {
+        ctx.typingInterval = setInterval(() => {
+          handler.typing!(chatId).catch(() => {});
+        }, 4500);
+      }
+    })();
+  }
 
   // process a channel message (or batched messages) through the agent
   async function processChannelMessage(msg: InboundMessage, batchedBodies?: string[]) {
@@ -260,23 +292,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       senderName: msg.senderName,
     });
 
-    // send status message to channel + start typing indicator
-    const handler = getChannelHandler(msg.channel);
-    let statusMsgId: string | undefined;
-    let typingInterval: ReturnType<typeof setInterval> | undefined;
-    if (handler) {
-      try {
-        if (handler.typing) handler.typing(msg.chatId).catch(() => {});
-        const sent = await handler.send(msg.chatId, 'thinking...');
-        statusMsgId = sent.id;
-        statusMessages.set(session.key, { channel: msg.channel, chatId: msg.chatId, messageId: sent.id });
-      } catch {}
-      if (handler.typing) {
-        typingInterval = setInterval(() => {
-          handler.typing!(msg.chatId).catch(() => {});
-        }, 4500);
-      }
-    }
+    // send status message to channel + start typing indicator (stored in channelRunContexts)
+    setupChannelStatus(session.key, msg.channel, msg.chatId);
 
     // init tool log for this run
     toolLogs.set(session.key, { completed: [], current: null, lastEditAt: 0 });
@@ -300,6 +317,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       '',
     ].join('\n');
 
+    // handleAgentRun may never return for persistent sessions (Claude async generator).
+    // Per-turn result handling is done inside the stream loop via channelRunContexts.
+    // For non-persistent providers (Codex), this returns normally and cleanup below runs as safety net.
     const result = await handleAgentRun({
       prompt: channelPrompt,
       sessionKey: session.key,
@@ -317,25 +337,20 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       },
     });
 
-    // clean up typing indicator and tool log
-    if (typingInterval) clearInterval(typingInterval);
+    // safety net cleanup for non-persistent providers (stream loop already handles this for persistent)
+    const ctx = channelRunContexts.get(session.key);
+    if (ctx) {
+      if (ctx.typingInterval) clearInterval(ctx.typingInterval);
+      channelRunContexts.delete(session.key);
+    }
     toolLogs.delete(session.key);
-
-    // delete the progress/status message, then send result as new message if needed
-    if (handler && statusMsgId) {
-      try { await handler.delete(statusMsgId, msg.chatId); } catch {}
-    }
     statusMessages.delete(session.key);
-    if (handler && !result?.usedMessageTool && result?.result) {
-      try { await handler.send(msg.chatId, result.result); } catch {}
-    }
 
-    // process any queued messages
+    // process any queued messages (only relevant for non-persistent providers)
     const queued = pendingMessages.get(session.key);
     if (queued && queued.length > 0) {
       const bodies = queued.map(m => m.body);
       pendingMessages.delete(session.key);
-      // use the last message as the "main" message for metadata
       const lastMsg = queued[queued.length - 1];
       await processChannelMessage(lastMsg, bodies);
     }
@@ -387,14 +402,19 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             `</incoming_message>`,
           ].join('\n');
           handle.inject(channelPrompt);
+          // record injected user message in session (CLI doesn't echo user text back)
+          fileSessionManager.append(session.sessionId, {
+            type: 'user',
+            timestamp: new Date().toISOString(),
+            content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: channelPrompt }] } },
+            metadata: { channel: msg.channel, chatId: msg.chatId, body: msg.body, senderName: msg.senderName },
+          });
           broadcast({ event: 'agent.user_message', data: {
             source: `${msg.channel}/${msg.chatId}`, sessionKey: session.key,
             prompt: msg.body, injected: true, timestamp: Date.now(),
           }});
-          const handler = getChannelHandler(msg.channel);
-          if (handler) {
-            try { await handler.send(msg.chatId, 'noted, working on it...'); } catch {}
-          }
+          // the stream loop will create a fresh status message on the next tool_use
+          // (via channelRunContexts with no statusMsgId), giving full tool streaming UX
           return;
         }
 
@@ -794,6 +814,23 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                   data: { source, sessionKey, tool: toolName, timestamp: Date.now() },
                 });
 
+                // new turn on channel — create fresh status message if none exists
+                const ctx = channelRunContexts.get(sessionKey);
+                if (ctx && !ctx.statusMsgId) {
+                  const h = getChannelHandler(ctx.channel);
+                  if (h) {
+                    try {
+                      if (h.typing) h.typing(ctx.chatId).catch(() => {});
+                      const sent = await h.send(ctx.chatId, 'thinking...');
+                      ctx.statusMsgId = sent.id;
+                      statusMessages.set(sessionKey, { channel: ctx.channel, chatId: ctx.chatId, messageId: sent.id });
+                      if (h.typing) {
+                        ctx.typingInterval = setInterval(() => { h.typing!(ctx.chatId).catch(() => {}); }, 4500);
+                      }
+                    } catch {}
+                  }
+                }
+
                 const tl = toolLogs.get(sessionKey);
                 if (tl) {
                   // push previous tool as completed
@@ -961,6 +998,48 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               outputTokens: u?.output_tokens || 0,
               totalCostUsd: (m.total_cost_usd as number) || 0,
             };
+
+            // per-turn: broadcast agent.result so desktop sets agentStatus to idle
+            broadcast({
+              event: 'agent.result',
+              data: {
+                source,
+                sessionKey,
+                sessionId: agentSessionId || '',
+                result: agentText,
+                usage: agentUsage,
+                timestamp: Date.now(),
+              },
+            });
+
+            // per-turn: broadcast board.update if agent used board tools
+            const tl = toolLogs.get(sessionKey);
+            if (tl) {
+              const allTools = [...tl.completed.map(t => t.name), tl.current?.name].filter(Boolean);
+              if (allTools.some(t => t?.startsWith('board_') || t?.startsWith('mcp__dorabot-tools__board_'))) {
+                broadcast({ event: 'board.update', data: {} });
+              }
+            }
+
+            // per-turn channel cleanup — delete status msg, send result, reset for next turn
+            const ctx = channelRunContexts.get(sessionKey);
+            if (ctx) {
+              if (ctx.typingInterval) { clearInterval(ctx.typingInterval); ctx.typingInterval = undefined; }
+              const h = getChannelHandler(ctx.channel);
+              if (h && ctx.statusMsgId) {
+                try { await h.delete(ctx.statusMsgId, ctx.chatId); } catch {}
+                ctx.statusMsgId = undefined;
+              }
+              statusMessages.delete(sessionKey);
+              if (h && !usedMessageTool && agentText) {
+                try { await h.send(ctx.chatId, agentText); } catch {}
+              }
+            }
+
+            // reset for next turn (persistent sessions get multiple result events)
+            usedMessageTool = false;
+            agentText = '';
+            toolLogs.set(sessionKey, { completed: [], current: null, lastEditAt: 0 });
           }
         }
 
@@ -993,28 +1072,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
         }
 
-        console.log(`[gateway] agent done: source=${source} result="${result.result.slice(0, 100)}..." cost=$${result.usage.totalCostUsd?.toFixed(4) || '?'}`);
-
-        broadcast({
-          event: 'agent.result',
-          data: {
-            source,
-            sessionKey,
-            sessionId: result.sessionId,
-            result: result.result,
-            usage: result.usage,
-            timestamp: Date.now(),
-          },
-        });
-
-        // broadcast board.update if agent used board tools
-        const tl = toolLogs.get(sessionKey);
-        if (tl) {
-          const allTools = [...tl.completed.map(t => t.name), tl.current?.name].filter(Boolean);
-          if (allTools.some(t => t?.startsWith('board_') || t?.startsWith('mcp__dorabot-tools__board_'))) {
-            broadcast({ event: 'board.update', data: {} });
-          }
-        }
+        // agent.result and board.update are broadcast per-turn inside executeStream's result handler.
+        // This point is only reached when the run actually ends (abort, error, or non-persistent provider).
+        console.log(`[gateway] agent run ended: source=${source} result="${result.result.slice(0, 100)}..." cost=$${result.usage.totalCostUsd?.toFixed(4) || '?'}`);
       } catch (err) {
         console.error(`[gateway] agent error: source=${source}`, err);
         broadcast({
@@ -1025,6 +1085,18 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         activeAbortControllers.delete(sessionKey);
         activeRunChannels.delete(sessionKey);
         runHandles.delete(sessionKey);
+        // clean up any remaining channel context (typing indicator, status message)
+        const ctx = channelRunContexts.get(sessionKey);
+        if (ctx) {
+          if (ctx.typingInterval) clearInterval(ctx.typingInterval);
+          if (ctx.statusMsgId) {
+            const h = getChannelHandler(ctx.channel);
+            if (h) { try { await h.delete(ctx.statusMsgId, ctx.chatId); } catch {} }
+          }
+          channelRunContexts.delete(sessionKey);
+        }
+        statusMessages.delete(sessionKey);
+        toolLogs.delete(sessionKey);
         sessionRegistry.setActiveRun(sessionKey, false);
         broadcast({ event: 'status.update', data: { activeRun: false, source, sessionKey } });
       }
@@ -1080,6 +1152,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const handle = runHandles.get(sessionKey);
           if (handle?.active) {
             handle.inject(prompt);
+            // record injected user message in session (CLI doesn't echo user text back)
+            fileSessionManager.append(session.sessionId, {
+              type: 'user',
+              timestamp: new Date().toISOString(),
+              content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } },
+            });
             broadcast({ event: 'agent.user_message', data: {
               source: 'desktop/chat', sessionKey, prompt, injected: true, timestamp: Date.now(),
             }});

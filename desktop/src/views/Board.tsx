@@ -160,7 +160,11 @@ function KanbanCard({ task, onDelete, onView, overlay }: {
         </div>
         <AlertDialog>
           <AlertDialogTrigger asChild>
-            <button className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive">
+            <button
+              className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+              onPointerDown={e => e.stopPropagation()}
+              onPointerUp={e => e.stopPropagation()}
+            >
               <Trash2 className="w-3 h-3" />
             </button>
           </AlertDialogTrigger>
