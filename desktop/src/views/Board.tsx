@@ -20,8 +20,10 @@ import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
-import { Plus, X, Trash2, LayoutGrid, ChevronRight, Ban } from 'lucide-react';
+import { Plus, X, Trash2, LayoutGrid, ChevronRight, Ban, User, Bot } from 'lucide-react';
 
 type BoardTask = {
   id: string;
@@ -56,11 +58,12 @@ const PRIORITY_COLORS: Record<string, string> = {
 
 // ── Droppable Column ──
 
-function KanbanColumn({ id, label, tasks, onDelete, bg, hoverColor }: {
+function KanbanColumn({ id, label, tasks, onDelete, onView, bg, hoverColor }: {
   id: string;
   label: string;
   tasks: BoardTask[];
   onDelete: (id: string) => void;
+  onView: (task: BoardTask) => void;
   bg: string;
   hoverColor: string;
 }) {
@@ -86,7 +89,7 @@ function KanbanColumn({ id, label, tasks, onDelete, bg, hoverColor }: {
             </div>
           )}
           {tasks.map(task => (
-            <KanbanCard key={task.id} task={task} onDelete={onDelete} />
+            <KanbanCard key={task.id} task={task} onDelete={onDelete} onView={onView} />
           ))}
         </div>
       </ScrollArea>
@@ -96,9 +99,10 @@ function KanbanColumn({ id, label, tasks, onDelete, bg, hoverColor }: {
 
 // ── Draggable Card ──
 
-function KanbanCard({ task, onDelete, overlay }: {
+function KanbanCard({ task, onDelete, onView, overlay }: {
   task: BoardTask;
   onDelete: (id: string) => void;
+  onView?: (task: BoardTask) => void;
   overlay?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -106,11 +110,23 @@ function KanbanCard({ task, onDelete, overlay }: {
     data: task,
   });
 
+  // track mouse down position to distinguish click from drag
+  const mouseDownPos = useState<{ x: number; y: number } | null>(null);
+
   return (
     <div
       ref={overlay ? undefined : setNodeRef}
       {...(overlay ? {} : listeners)}
       {...(overlay ? {} : attributes)}
+      onPointerDown={e => { mouseDownPos[1]({ x: e.clientX, y: e.clientY }); }}
+      onPointerUp={e => {
+        const down = mouseDownPos[0];
+        if (down && onView) {
+          const dist = Math.hypot(e.clientX - down.x, e.clientY - down.y);
+          if (dist < 5) onView(task);
+        }
+        mouseDownPos[1](null);
+      }}
       className={cn(
         'group rounded-md border border-border bg-card p-2 text-xs transition-shadow cursor-grab active:cursor-grabbing',
         isDragging && 'opacity-30',
@@ -172,6 +188,7 @@ export function BoardView({ gateway }: Props) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [showRejected, setShowRejected] = useState(false);
   const [activeTask, setActiveTask] = useState<BoardTask | null>(null);
+  const [viewTask, setViewTask] = useState<BoardTask | null>(null);
   const [newTask, setNewTask] = useState({
     title: '',
     description: '',
@@ -369,6 +386,7 @@ export function BoardView({ gateway }: Props) {
               hoverColor={col.hoverColor}
               tasks={tasksByStatus(col.id)}
               onDelete={deleteTask}
+              onView={setViewTask}
             />
           ))}
         </div>
