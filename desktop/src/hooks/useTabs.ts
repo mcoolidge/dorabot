@@ -41,7 +41,7 @@ const TABS_STORAGE_KEY = 'dorabot:tabs';
 const ACTIVE_TAB_STORAGE_KEY = 'dorabot:activeTabId';
 
 function makeDefaultChatTab(): ChatTab {
-  const chatId = `task-${Date.now()}`;
+  const chatId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   return {
     id: `chat:${chatId}`,
     type: 'chat',
@@ -181,9 +181,10 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     if (!tab) return;
     setActiveTabId(tabId);
 
-    // Update group's active tab
+    // Update group's active tab and switch focus to that group
     const ownerGroup = groupId || layout.findGroupForTab(tabId) || layout.activeGroupId;
     layout.setGroupActiveTab(ownerGroup, tabId);
+    layout.focusGroup(ownerGroup);
 
     if (isChatTab(tab)) {
       gw.setActiveSession(tab.sessionKey, tab.chatId);
