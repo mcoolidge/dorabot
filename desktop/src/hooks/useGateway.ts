@@ -186,6 +186,21 @@ type SessionMessage = {
 
 function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
   const items: ChatItem[] = [];
+  // Track active Task tool scopes — messages between a Task tool_use and its
+  // matching tool_result are subagent content that should be nested as subItems.
+  const activeTaskIds = new Set<string>();
+  const taskSubItems = new Map<string, ChatItem[]>();
+
+  const extractResultText = (block: any): string => {
+    if (typeof block.content === 'string') return block.content;
+    if (Array.isArray(block.content)) {
+      return block.content
+        .filter((b: any) => b.type === 'text')
+        .map((b: any) => b.text)
+        .join('\n');
+    }
+    return '';
+  };
 
   for (const msg of messages) {
     const c = msg.content;
@@ -195,34 +210,62 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
 
     if (msg.type === 'user') {
       const userMsg = (c as any).message;
+      const parentToolUseId = (c as any).parent_tool_use_id as string | undefined;
       const blocks = userMsg?.content;
-      // detect tool result messages by checking for tool_result blocks or tool_use_result field
       const hasToolResult = Array.isArray(blocks) && blocks.some((b: any) => b.type === 'tool_result');
 
       if (hasToolResult) {
-        // tool results - patch matching tool_use items
         if (Array.isArray(blocks)) {
           for (const block of blocks) {
-            if (block.type === 'tool_result') {
-              let resultText = '';
-              if (typeof block.content === 'string') {
-                resultText = block.content;
-              } else if (Array.isArray(block.content)) {
-                resultText = block.content
-                  .filter((b: any) => b.type === 'text')
-                  .map((b: any) => b.text)
-                  .join('\n');
-              }
+            if (block.type !== 'tool_result') continue;
+            const resultText = extractResultText(block);
+            const toolUseId = block.tool_use_id as string;
+
+            // Check if this is the final result for a Task tool
+            if (activeTaskIds.has(toolUseId)) {
+              activeTaskIds.delete(toolUseId);
+              const subs = taskSubItems.get(toolUseId) || [];
+              taskSubItems.delete(toolUseId);
+              const trimmed = resultText.slice(0, 2000);
+
               for (let i = items.length - 1; i >= 0; i--) {
                 const it = items[i];
-                if (it.type === 'tool_use' && it.id === block.tool_use_id) {
-                  items[i] = { ...it, output: resultText.slice(0, 2000), is_error: block.is_error || false };
+                if (it.type === 'tool_use' && it.id === toolUseId) {
+                  items[i] = { ...it, output: trimmed, is_error: block.is_error || false, subItems: subs.length > 0 ? subs : trimmed ? [{ type: 'text' as const, content: trimmed, timestamp: it.timestamp }] : undefined };
                   break;
                 }
+              }
+              continue;
+            }
+
+            // Subagent tool result — patch onto the subItems list
+            if (parentToolUseId && activeTaskIds.has(parentToolUseId)) {
+              const subs = taskSubItems.get(parentToolUseId);
+              if (subs) {
+                for (let i = subs.length - 1; i >= 0; i--) {
+                  const si = subs[i];
+                  if (si.type === 'tool_use' && si.id === toolUseId) {
+                    subs[i] = { ...si, output: resultText.slice(0, 1000), is_error: block.is_error || false };
+                    break;
+                  }
+                }
+              }
+              continue;
+            }
+
+            // Regular (non-Task) tool result — patch top-level items
+            for (let i = items.length - 1; i >= 0; i--) {
+              const it = items[i];
+              if (it.type === 'tool_use' && it.id === toolUseId) {
+                items[i] = { ...it, output: resultText.slice(0, 2000), is_error: block.is_error || false };
+                break;
               }
             }
           }
         }
+      } else if (activeTaskIds.size > 0) {
+        // Subagent prompt or intermediate user message — skip from top-level
+        continue;
       } else {
         // real user message
         let text = '';
@@ -244,18 +287,50 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
     if (msg.type === 'assistant') {
       const assistantMsg = (c as any).message;
       const blocks = assistantMsg?.content;
+
+      // If we're inside a Task scope, route blocks into subItems
+      if (activeTaskIds.size > 0) {
+        const taskId = [...activeTaskIds].at(-1)!;
+        const subs = taskSubItems.get(taskId) || [];
+        if (Array.isArray(blocks)) {
+          for (const block of blocks) {
+            if (block.type === 'text' && block.text) {
+              subs.push({ type: 'text', content: block.text, timestamp: ts });
+            } else if (block.type === 'tool_use') {
+              subs.push({
+                type: 'tool_use',
+                id: block.id || '',
+                name: cleanToolName(block.name || 'unknown'),
+                input: typeof block.input === 'string' ? block.input : JSON.stringify(block.input || {}),
+                timestamp: ts,
+              });
+            }
+          }
+        }
+        taskSubItems.set(taskId, subs);
+        continue;
+      }
+
       if (Array.isArray(blocks)) {
         for (const block of blocks) {
           if (block.type === 'text' && block.text) {
             items.push({ type: 'text', content: block.text, timestamp: ts });
           } else if (block.type === 'tool_use') {
-            items.push({
+            const name = cleanToolName(block.name || 'unknown');
+            const item: ChatItem = {
               type: 'tool_use',
               id: block.id || '',
-              name: cleanToolName(block.name || 'unknown'),
+              name,
               input: typeof block.input === 'string' ? block.input : JSON.stringify(block.input || {}),
               timestamp: ts,
-            });
+            };
+            items.push(item);
+
+            // If this is a Task tool, start collecting subagent messages
+            if (name === 'Task') {
+              activeTaskIds.add(block.id);
+              taskSubItems.set(block.id, []);
+            }
           } else if (block.type === 'thinking' && block.thinking) {
             items.push({ type: 'thinking', content: block.thinking, timestamp: ts });
           }
@@ -832,7 +907,10 @@ export function useGateway(url = 'wss://localhost:18789') {
     // don't override status if already running (injection case)
     setAgentStatus(prev => prev === 'idle' ? 'thinking...' : prev);
     try {
-      await rpc('chat.send', { prompt, chatId: currentChatIdRef.current });
+      const res = await rpc('chat.send', { prompt, chatId: currentChatIdRef.current }) as { sessionKey?: string } | undefined;
+      if (res?.sessionKey) {
+        activeSessionKeyRef.current = res.sessionKey;
+      }
     } catch (err) {
       setChatItems(prev => [...prev, {
         type: 'error',
