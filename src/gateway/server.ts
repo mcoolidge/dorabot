@@ -818,6 +818,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         let usedMessageTool = false;
         let hadStreamEvents = false;
 
+        // track Task tool_use IDs so we can recognize their tool_results
+        const taskToolUseIds = new Set<string>();
+
         for await (const msg of gen) {
           const m = msg as Record<string, unknown>;
 
@@ -830,23 +833,45 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (m.type === 'stream_event') {
             hadStreamEvents = true;
             const event = m.event as Record<string, unknown>;
+            const evtType = event.type as string;
+
+            // track Task tool_use IDs
+            if (evtType === 'content_block_start') {
+              const cb = event.content_block as Record<string, unknown>;
+              if (cb?.type === 'tool_use' && cleanToolName(cb.name as string) === 'Task') {
+                taskToolUseIds.add(cb.id as string);
+              }
+            }
+
+            // SDK sets parent_tool_use_id on user messages (tool_results) but not
+            // on stream_events. subagent stream_events are not yielded by the SDK —
+            // only their tool_results come through as user messages.
+            const parentId = m.parent_tool_use_id || null;
 
             // new turn starting — re-activate if idle between turns
-            if (event.type === 'message_start' && !sessionRegistry.get(sessionKey)?.activeRun) {
+            if (evtType === 'message_start' && !sessionRegistry.get(sessionKey)?.activeRun) {
               sessionRegistry.setActiveRun(sessionKey, true);
               broadcast({ event: 'status.update', data: { activeRun: true, source, sessionKey } });
               broadcastSessionUpdate(sessionKey);
             }
 
+            // debug: log stream events
+            if (evtType === 'content_block_start' || evtType === 'message_start') {
+              const cb = (event as any).content_block;
+              console.log(`[stream] ${evtType} parent=${parentId} block=${cb?.type || '-'} name=${cb?.name || '-'} id=${cb?.id || '-'}`);
+            }
+
             broadcast({
               event: 'agent.stream',
-              data: { source, sessionKey, event, parentToolUseId: m.parent_tool_use_id || null, timestamp: Date.now() },
+              data: { source, sessionKey, event, parentToolUseId: parentId, timestamp: Date.now() },
             });
 
             if (event.type === 'content_block_start') {
               const cb = event.content_block as Record<string, unknown>;
               if (cb?.type === 'tool_use') {
                 const toolName = cleanToolName(cb.name as string);
+                // debug: log tool_use starts with their IDs
+                console.log(`[tool_use] name=${toolName} id=${cb.id} parent=${m.parent_tool_use_id || 'none'}`);
                 if (toolName === 'message') usedMessageTool = true;
                 broadcast({
                   event: 'agent.tool_use',
@@ -922,9 +947,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
 
           if (m.type === 'assistant') {
-            // Only broadcast full assistant messages for non-streaming providers (Codex).
-            // Claude streams via stream_event — broadcasting here too would cause duplicates.
-            if (!hadStreamEvents) {
+            const isSubagentMsg = !!(m.parent_tool_use_id);
+            // broadcast full assistant messages for:
+            // 1. non-streaming providers (Codex) — no stream_events exist
+            // 2. subagent messages — SDK yields these as complete messages, not stream_events
+            if (!hadStreamEvents || isSubagentMsg) {
               broadcast({
                 event: 'agent.message',
                 data: { source, sessionKey, message: m, parentToolUseId: m.parent_tool_use_id || null, timestamp: Date.now() },
@@ -935,9 +962,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             if (Array.isArray(content)) {
               for (const block of content) {
                 const b = block as Record<string, unknown>;
-                if (b.type === 'text') agentText = b.text as string;
-                // broadcast tool_use for non-streaming providers (status bar + channel status)
-                if (!hadStreamEvents && b.type === 'tool_use') {
+                if (b.type === 'text' && !isSubagentMsg) agentText = b.text as string;
+                // broadcast tool_use for non-streaming providers and subagent messages
+                if ((!hadStreamEvents || isSubagentMsg) && b.type === 'tool_use') {
                   const toolName = cleanToolName(b.name as string);
                   if (toolName === 'message') usedMessageTool = true;
                   broadcast({
@@ -971,6 +998,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             if (Array.isArray(content)) {
               for (const block of content) {
                 if (block.type === 'tool_result') {
+                  // SDK sets parent_tool_use_id on subagent tool_results correctly.
+                  // Task tool_results themselves have null parent (they're top-level).
+                  const sdkParentId = (m as any).parent_tool_use_id || null;
+                  const isTaskResult = taskToolUseIds.has(block.tool_use_id);
+                  const parentId = isTaskResult ? null : sdkParentId;
+                  if (isTaskResult) taskToolUseIds.delete(block.tool_use_id);
+
                   let resultText = '';
                   let imageData: string | undefined;
                   if (typeof block.content === 'string') {
@@ -996,7 +1030,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                       content: resultText.slice(0, 2000),
                       imageData,
                       is_error: block.is_error || false,
-                      parentToolUseId: (m as any).parent_tool_use_id || null,
+                      parentToolUseId: parentId,
                       timestamp: Date.now(),
                     },
                   });

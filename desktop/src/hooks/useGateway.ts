@@ -446,19 +446,51 @@ export function useGateway(url = 'wss://localhost:18789') {
       }
 
       case 'agent.message': {
-        // Non-streaming assistant messages (Codex provider sends full messages, not stream deltas)
-        const d = data as { source: string; sessionKey?: string; message: Record<string, unknown>; timestamp: number };
+        // Full assistant messages — from non-streaming providers (Codex) or subagent turns.
+        // SDK yields subagent turns as complete assistant messages with parent_tool_use_id set.
+        const d = data as { source: string; sessionKey?: string; message: Record<string, unknown>; parentToolUseId?: string | null; timestamp: number };
         if (d.sessionKey && d.sessionKey !== activeSessionKeyRef.current) break;
+        const parentId = d.parentToolUseId;
         const assistantMsg = d.message?.message as Record<string, unknown>;
         const content = assistantMsg?.content as unknown[];
+
+        if (parentId && Array.isArray(content)) {
+          // subagent message — route tool_use and text blocks into parent Task's subItems
+          setChatItems(prev => {
+            for (let i = prev.length - 1; i >= 0; i--) {
+              const it = prev[i];
+              if (it.type === 'tool_use' && it.id === parentId) {
+                const subs = [...(it.subItems || [])];
+                for (const block of content) {
+                  const b = block as Record<string, unknown>;
+                  if (b.type === 'tool_use') {
+                    subs.push({
+                      type: 'tool_use', id: (b.id as string) || '',
+                      name: cleanToolName((b.name as string) || 'unknown'),
+                      input: typeof b.input === 'string' ? b.input : JSON.stringify(b.input || {}),
+                      streaming: true, timestamp: d.timestamp || Date.now(),
+                    });
+                  } else if (b.type === 'text' && typeof b.text === 'string') {
+                    subs.push({ type: 'text', content: b.text as string, streaming: false, timestamp: d.timestamp || Date.now() });
+                  }
+                }
+                const updated = [...prev];
+                updated[i] = { ...it, subItems: subs };
+                return updated;
+              }
+            }
+            return prev;
+          });
+          break;
+        }
+
+        // top-level assistant message (non-streaming provider like Codex)
         if (Array.isArray(content)) {
           for (const block of content) {
             const b = block as Record<string, unknown>;
             if (b.type === 'text' && typeof b.text === 'string') {
               setChatItems(prev => [...prev, { type: 'text', content: b.text as string, streaming: false, timestamp: d.timestamp || Date.now() }]);
             } else if (b.type === 'tool_use') {
-              // streaming: true so tool cards show animations while waiting for result
-              // (Codex sends full tool_use blocks, but result comes later)
               setChatItems(prev => [...prev, {
                 type: 'tool_use',
                 id: (b.id as string) || '',
@@ -476,24 +508,37 @@ export function useGateway(url = 'wss://localhost:18789') {
       }
 
       case 'agent.tool_result': {
-        const d = data as { sessionKey?: string; tool_use_id: string; content: string; imageData?: string; is_error?: boolean; parentToolUseId?: string | null };
+        const d = data as { sessionKey?: string; tool_use_id: string; toolName?: string; content: string; imageData?: string; is_error?: boolean; parentToolUseId?: string | null };
         if (d.sessionKey && d.sessionKey !== activeSessionKeyRef.current) break;
         setChatItems(prev => {
-          // check subItems first if this result belongs to a subagent
+          // subagent tool result — SDK yields these with parent_tool_use_id set
+          // but does NOT yield subagent stream_events, so we create synthetic
+          // tool_use subItems for results that have no matching tool_use yet
           if (d.parentToolUseId) {
             for (let i = prev.length - 1; i >= 0; i--) {
               const it = prev[i];
-              if (it.type === 'tool_use' && it.id === d.parentToolUseId && it.subItems) {
-                for (let j = it.subItems.length - 1; j >= 0; j--) {
-                  const sub = it.subItems[j];
+              if (it.type === 'tool_use' && it.id === d.parentToolUseId) {
+                const subs = it.subItems || [];
+                // try to find existing tool_use subItem
+                for (let j = subs.length - 1; j >= 0; j--) {
+                  const sub = subs[j];
                   if (sub.type === 'tool_use' && sub.id === d.tool_use_id) {
                     const updated = [...prev];
-                    const newSubs = [...it.subItems];
+                    const newSubs = [...subs];
                     newSubs[j] = { ...sub, output: d.content, imageData: d.imageData, is_error: d.is_error, streaming: false };
                     updated[i] = { ...it, subItems: newSubs };
                     return updated;
                   }
                 }
+                // no matching tool_use — create synthetic one with result
+                const updated = [...prev];
+                const newSub: ChatItem = {
+                  type: 'tool_use', id: d.tool_use_id, name: d.toolName || 'tool',
+                  input: '', output: d.content, imageData: d.imageData,
+                  is_error: d.is_error, streaming: false, timestamp: Date.now(),
+                };
+                updated[i] = { ...it, subItems: [...subs, newSub] };
+                return updated;
               }
             }
           }
