@@ -29,6 +29,18 @@ function createWindow(): void {
     },
   });
 
+  // Intercept Cmd+W and re-dispatch to renderer so it closes a tab instead of the window
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if ((input.meta || input.control) && input.key.toLowerCase() === 'w') {
+      event.preventDefault();
+      mainWindow?.webContents.sendInputEvent({
+        type: 'keyDown',
+        keyCode: 'w',
+        modifiers: input.meta ? ['meta'] : ['control'],
+      });
+    }
+  });
+
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);
     mainWindow.webContents.openDevTools({ mode: 'detach' });
