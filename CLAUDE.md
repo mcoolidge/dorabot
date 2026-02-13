@@ -8,10 +8,13 @@ Personal AI agent with multi-channel messaging, browser automation, and persiste
 - **Gateway**: WebSocket RPC server on port 18789 (`src/gateway/server.ts`)
 - **Desktop**: Electron + Vite + React in `desktop/`
 - **Channels**: WhatsApp (Baileys), Telegram (grammy)
-- **Sessions**: JSONL-based, `~/.dorabot/sessions/`
-- **Tools**: MCP server — `message`, `browser`, `screenshot`, `cron`
+- **Database**: SQLite (`~/.dorabot/dorabot.db`) via better-sqlite3, WAL mode
+- **Tools**: MCP server — `message`, `browser`, `screenshot`, `calendar` (4 tools), `goals` (4 tools)
 - **Browser**: Playwright-core via CDP, persistent profile at `~/.dorabot/browser/profile/`, port 19222
 - **Skills**: Markdown files in `./skills/` and `~/.dorabot/skills/`, YAML frontmatter for metadata
+- **Providers**: Pluggable — Claude (Agent SDK, default) or OpenAI Codex (Codex SDK)
+- **Heartbeat**: Configurable periodic agent polling loop for proactive work
+- **Calendar**: RFC 5545 iCal RRULE-based scheduling (replaced cron)
 
 ## Build
 
@@ -32,19 +35,27 @@ npm run dev:cli                      # interactive CLI mode
 
 ### Core
 - `src/agent.ts` — `runAgent()` and `streamAgent()`, orchestrates SDK `query()` with config, skills, workspace, hooks
-- `src/system-prompt.ts` — dynamic system prompt builder, 17 sections, 3 modes (full/minimal/none)
+- `src/db.ts` — SQLite database singleton (`getDb()`), schema creation, WAL mode, foreign keys
+- `src/system-prompt.ts` — dynamic system prompt builder, 21 sections, 3 modes (full/minimal/none)
 - `src/config.ts` — config loading, merging, path allowlisting via `isPathAllowed()`
 - `src/workspace.ts` — loads SOUL.md, USER.md, AGENTS.md, MEMORY.md from `~/.dorabot/workspace/`
 - `src/index.ts` — CLI entry point
 
 ### Gateway
-- `src/gateway/server.ts` — WebSocket RPC server, 43+ RPC methods, agent run queue, tool approval system
+- `src/gateway/server.ts` — WebSocket RPC server, 71 RPC methods, agent run queue, tool approval system
 - `src/gateway/types.ts` — `WsMessage`, `WsResponse`, `WsEvent`, `SessionInfo` types
-- `src/gateway/session-registry.ts` — in-memory session tracking, persisted to `_registry.json`
+- `src/gateway/session-registry.ts` — in-memory session tracking, backed by SQLite `sessions` table
 - `src/gateway/channel-manager.ts` — start/stop WhatsApp and Telegram monitors
 
-### Sessions
-- `src/session/manager.ts` — JSONL append-only storage, metadata index at `_index.json`
+### Sessions & Database
+- `src/session/manager.ts` — SQLite-backed session/message storage (sessions + messages tables)
+- `scripts/migrate-to-sqlite.ts` — one-time migration from legacy JSONL files to SQLite
+
+### Providers
+- `src/providers/index.ts` — provider factory, singleton management
+- `src/providers/types.ts` — provider type definitions
+- `src/providers/claude.ts` — Claude provider (Agent SDK, default)
+- `src/providers/codex.ts` — OpenAI Codex provider (dynamic import)
 
 ### Channels
 - `src/channels/types.ts` — `InboundMessage`, `ChannelHandler`, `SendOptions`
@@ -52,24 +63,32 @@ npm run dev:cli                      # interactive CLI mode
 - `src/channels/telegram/` — grammy bot, long-polling runner, markdown→HTML conversion
 
 ### Tools
-- `src/tools/index.ts` — MCP server creation, registers all custom tools
+- `src/tools/index.ts` — MCP server creation, registers 12 custom tools
 - `src/tools/messaging.ts` — `messageTool` + channel handler registry pattern
-- `src/tools/browser.ts` — single tool with `action` discriminator, 20 actions
-- `src/tools/cron.ts` — `schedule_reminder`, `schedule_recurring`, `schedule_cron`, `list_reminders`, `cancel_reminder`
+- `src/tools/browser.ts` — single tool with `action` discriminator, 37 actions (input, navigation, snapshots, scripts, console/network inspection)
+- `src/tools/calendar.ts` — `schedule`, `list_schedule`, `update_schedule`, `cancel_schedule` (RFC 5545 RRULE)
+- `src/tools/goals.ts` — `goals_view`, `goals_add`, `goals_update`, `goals_propose`
+- `src/tools/screenshot.ts` — standalone screenshot tool
+
+### Calendar
+- `src/calendar/scheduler.ts` — iCal RRULE-based scheduler, auto-migration from legacy cron_jobs
+
+### Heartbeat
+- `src/heartbeat/runner.ts` — periodic agent polling, configurable interval/active hours, reads HEARTBEAT.md
 
 ### Browser
 - `src/browser/manager.ts` — find Chromium, launch via CDP, singleton page
-- `src/browser/refs.ts` — DOM snapshot → `e1`, `e2` refs, resolve ref → Playwright Locator
-- `src/browser/actions.ts` — open, snapshot, click, type, fill, screenshot, evaluate, pdf, etc.
+- `src/browser/refs.ts` — DOM snapshot → uid refs, resolve ref → Playwright Locator
+- `src/browser/actions.ts` — 30+ action functions: open, snapshot, click, click_at, drag, type, fill, fill_form, select, press, hover, upload_file, scroll, cookies, evaluate, console/network inspection, pdf, etc.
 
 ### Skills
 - `src/skills/loader.ts` — load from dirs, eligibility checks, prompt matching
-- `skills/` — 6 built-in skills: agent-swarm-orchestation, github, himalaya, macos, meme, onboard
+- `skills/` — 9 built-in skills: agent-swarm-orchestation, github, himalaya, image-gen, macos, meme, onboard, polymarket, remotion
 
 ### Desktop
 - `desktop/src/App.tsx` — root layout, 8-tab navigation, resizable 3-panel layout
-- `desktop/src/hooks/useGateway.ts` — central state, WebSocket RPC, 39 methods, event handling, streaming
-- `desktop/src/views/` — Chat, Channel, Settings, Soul, Status, Tools, Automation
+- `desktop/src/hooks/useGateway.ts` — central state, WebSocket RPC, 40+ methods, event handling, streaming
+- `desktop/src/views/` — Chat, Goals, Channel, Skills, Settings, Soul, Status, Tools
 - `desktop/electron/main.ts` — Electron main process, tray, window management
 - `desktop/electron/preload.ts` — context bridge for gateway token
 
@@ -93,7 +112,7 @@ User message → CLI or Gateway RPC
     → build system prompt
     → SDK query() with tools, hooks, sandbox
     → stream/yield messages
-    → persist to JSONL session
+    → persist to SQLite
   → return AgentResult { sessionId, result, messages, usage }
 ```
 
