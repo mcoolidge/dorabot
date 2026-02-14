@@ -1,4 +1,9 @@
+import { exec } from 'node:child_process';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Config } from '../config.js';
+
+const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 // hook event types (matching Claude SDK)
 export type HookEvent =
@@ -132,6 +137,32 @@ const bashValidationHook: HookCallback = async (input) => {
   return { continue: true };
 };
 
+// typecheck after .ts edits in the project
+const typecheckHook: HookCallback = async (input) => {
+  if (input.hook_event_name !== 'PostToolUse') return { continue: true };
+
+  const toolInput = input.tool_input as { file_path?: string };
+  const filePath = toolInput.file_path;
+  if (!filePath || !filePath.endsWith('.ts')) return { continue: true };
+
+  const resolved = resolve(filePath);
+  if (!resolved.startsWith(PROJECT_ROOT + '/src/')) return { continue: true };
+
+  const output = await new Promise<string>((resolve) => {
+    exec('npx tsc --noEmit 2>&1', { cwd: PROJECT_ROOT, timeout: 30000 }, (_err, stdout, stderr) => {
+      resolve((stdout || stderr || '').trim());
+    });
+  });
+
+  if (output) {
+    return {
+      continue: true,
+      systemMessage: `typecheck failed after editing ${filePath}. fix these errors before continuing:\n\n${output.slice(0, 3000)}`,
+    };
+  }
+  return { continue: true };
+};
+
 // session tracking hook
 const sessionTrackingHook: HookCallback = async (input) => {
   if (input.hook_event_name === 'SessionStart') {
@@ -144,12 +175,13 @@ const sessionTrackingHook: HookCallback = async (input) => {
 
 // default hooks configuration
 export function createDefaultHooks(config: Config): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
-  // bash validation is handled by canUseTool + tool-policy.ts approval flow
   return {
     SessionStart: [
-      {
-        hooks: [sessionTrackingHook],
-      },
+      { hooks: [sessionTrackingHook] },
+    ],
+    PostToolUse: [
+      { matcher: 'Write', hooks: [typecheckHook] },
+      { matcher: 'Edit', hooks: [typecheckHook] },
     ],
   };
 }
