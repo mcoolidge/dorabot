@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo, type KeyboardEvent } from 'react';
+import { dorabotComputerImg } from '../assets';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { useGateway, ChatItem, AskUserQuestion } from '../hooks/useGateway';
@@ -604,7 +605,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
               <div className="text-center space-y-2">
                 <div className="relative w-24 h-24 mx-auto">
                   <div className="absolute inset-0 rounded-full bg-success/30 blur-xl animate-pulse" />
-                  <img src="./dorabot-computer.png" alt="dorabot" className="relative w-24 h-24 dorabot-alive" />
+                  <img src={dorabotComputerImg} alt="dorabot" className="relative w-24 h-24 dorabot-alive" />
                 </div>
                 <h1 className="text-lg font-semibold text-foreground">{getGreeting()}</h1>
                 <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">

@@ -1,5 +1,6 @@
 import { motion, AnimatePresence } from "motion/react"
 import { Check, CheckCheck, Clock } from "lucide-react"
+import { whatsappImg, telegramImg } from "../../assets"
 import type { ToolUIProps } from "../tool-ui"
 import { safeParse } from "../../lib/safe-parse"
 
@@ -42,7 +43,7 @@ export function MessageStream({ input, output, isError, streaming }: ToolUIProps
       ? "text-[oklch(0.70_0.12_250)]"
       : "text-primary"
 
-  const channelImg = isWhatsapp ? "./whatsapp.png" : isTelegram ? "./telegram.png" : null
+  const channelImg = isWhatsapp ? whatsappImg : isTelegram ? telegramImg : null
 
   return (
     <div className="rounded-lg overflow-hidden border border-border/60 bg-[var(--stream-base)]">

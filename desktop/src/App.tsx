@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { dorabotImg, whatsappImg, telegramImg } from './assets';
 import { useGateway } from './hooks/useGateway';
 import { useTabs, isChatTab } from './hooks/useTabs';
 import type { Tab, TabType } from './hooks/useTabs';
@@ -299,8 +300,8 @@ export default function App() {
   }, [layout, tabState]);
 
   const channelIcon = (ch?: string) => {
-    if (ch === 'whatsapp') return <img src="./whatsapp.png" className="w-3 h-3" alt="W" />;
-    if (ch === 'telegram') return <img src="./telegram.png" className="w-3 h-3" alt="T" />;
+    if (ch === 'whatsapp') return <img src={whatsappImg} className="w-3 h-3" alt="W" />;
+    if (ch === 'telegram') return <img src={telegramImg} className="w-3 h-3" alt="T" />;
     return <MessageSquare className="w-3 h-3 opacity-50" />;
   };
 
@@ -478,7 +479,7 @@ export default function App() {
 
       {/* titlebar — pure drag chrome */}
       <div className="h-11 bg-card glass border-b border-border flex items-center pl-[78px] pr-4 shrink-0" style={{ WebkitAppRegion: 'drag' } as any}>
-        <img src="./dorabot.png" alt="dorabot" className="w-10 h-10 mr-1 dorabot-alive" />
+        <img src={dorabotImg} alt="dorabot" className="w-10 h-10 mr-1 dorabot-alive" />
         <span className="text-base text-muted-foreground font-medium">dorabot</span>
         <a
           href="https://github.com/suitedaces/dorabot"

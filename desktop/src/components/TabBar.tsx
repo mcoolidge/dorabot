@@ -1,5 +1,6 @@
 import type { Tab } from '../hooks/useTabs';
 import { isChatTab } from '../hooks/useTabs';
+import { whatsappImg, telegramImg } from '../assets';
 import type { SessionState } from '../hooks/useGateway';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
 import { cn } from '@/lib/utils';
@@ -20,8 +21,8 @@ const VIEW_ICONS: Record<string, React.ReactNode> = {
 
 function getTabIcon(tab: Tab) {
   if (isChatTab(tab)) {
-    if (tab.channel === 'whatsapp') return <img src="./whatsapp.png" className="w-3 h-3" alt="W" />;
-    if (tab.channel === 'telegram') return <img src="./telegram.png" className="w-3 h-3" alt="T" />;
+    if (tab.channel === 'whatsapp') return <img src={whatsappImg} className="w-3 h-3" alt="W" />;
+    if (tab.channel === 'telegram') return <img src={telegramImg} className="w-3 h-3" alt="T" />;
     return <MessageSquare className="w-3 h-3" />;
   }
   return VIEW_ICONS[tab.type] || <MessageSquare className="w-3 h-3" />;

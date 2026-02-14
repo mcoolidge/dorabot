@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { dorabotComputerImg } from '../assets';
 import type { useGateway } from '../hooks/useGateway';
 import { ProviderSetup } from './ProviderSetup';
 import { AuroraBackground } from './aceternity/aurora-background';
@@ -153,7 +154,7 @@ function DetectingStep() {
     <div className="flex flex-col items-center gap-3 py-8">
       <div className="relative w-20 h-20 mx-auto">
         <div className="absolute inset-0 rounded-full bg-success/30 blur-xl animate-pulse" />
-        <img src="./dorabot-computer.png" alt="dorabot" className="relative w-20 h-20 dorabot-alive" />
+        <img src={dorabotComputerImg} alt="dorabot" className="relative w-20 h-20 dorabot-alive" />
       </div>
       <Loader2 className="w-5 h-5 text-primary animate-spin" />
       <div className="text-[11px] text-muted-foreground">checking for existing login...</div>
@@ -209,7 +210,7 @@ function ChooseStep({
       <div className="text-center space-y-3">
         <div className="relative w-20 h-20 mx-auto">
           <div className="absolute inset-0 rounded-full bg-success/30 blur-xl animate-pulse" />
-          <img src="./dorabot-computer.png" alt="dorabot" className="relative w-20 h-20 dorabot-alive" />
+          <img src={dorabotComputerImg} alt="dorabot" className="relative w-20 h-20 dorabot-alive" />
         </div>
         <div>
           <h1 className="text-base font-semibold text-foreground">welcome to dorabot</h1>
@@ -372,7 +373,7 @@ function PermissionsStep({ onComplete }: { onComplete: () => void }) {
       <div className="text-center space-y-2">
         <div className="relative w-20 h-20 mx-auto">
           <div className="absolute inset-0 rounded-full bg-success/30 blur-xl animate-pulse" />
-          <img src="./dorabot-computer.png" alt="dorabot" className="relative w-20 h-20 dorabot-alive" />
+          <img src={dorabotComputerImg} alt="dorabot" className="relative w-20 h-20 dorabot-alive" />
         </div>
         <div>
           <h1 className="text-base font-semibold text-foreground">one more thing</h1>
