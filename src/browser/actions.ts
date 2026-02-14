@@ -12,6 +12,7 @@ import {
   type BrowserConfig,
 } from './manager.js';
 import { clearRefs, clearAllRefs, generateSnapshot, resolveRef, getRefEntry } from './refs.js';
+import { constrainImageSize } from '../image-utils.js';
 
 export type ActionResult = {
   text: string;
@@ -661,16 +662,18 @@ export async function browserScreenshot(
     });
   }
 
+  const resized = await constrainImageSize(buffer);
+
   const ext = screenshotType === 'jpeg' ? 'jpg' : screenshotType;
   const requestedName = opts.filePath
     ? opts.filePath.replace(/^.*[\\/]/, '')
     : `browser-screenshot-${Date.now()}.${ext}`;
   const out = join(tmpdir(), requestedName || `browser-screenshot-${Date.now()}.${ext}`);
-  await writeFile(out, buffer);
+  await writeFile(out, resized);
 
   const url = page.url();
   const title = await page.title().catch(() => '(unavailable)');
-  const base64 = buffer.toString('base64');
+  const base64 = resized.toString('base64');
   const mimeType = screenshotType === 'jpeg' ? 'image/jpeg' : 'image/png';
   return {
     text: `Screenshot captured from: ${url} (${title})\nSaved screenshot path: ${out}`,

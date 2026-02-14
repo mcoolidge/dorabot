@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { constrainImageSize } from '../image-utils.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -28,7 +29,8 @@ export const screenshotTool = tool(
 
       await execFileAsync(cmd[0], cmd.slice(1), { timeout: 10_000 });
 
-      const buffer = await readFile(outPath);
+      const raw = await readFile(outPath);
+      const buffer = await constrainImageSize(raw);
       const base64 = buffer.toString('base64');
 
       return {
