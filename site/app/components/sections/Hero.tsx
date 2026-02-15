@@ -4,7 +4,6 @@ import { motion } from "motion/react"
 import { AuroraBackground } from "../aceternity/aurora-background"
 import { SectionPlayer } from "../remotion/SectionPlayer"
 import { HeroOrb } from "../remotion/HeroOrb"
-import { HeroShowcasePlayer } from "../remotion/HeroShowcasePlayer"
 import { FlipNodes } from "../aceternity/flip-words"
 import { HoverBorderGradient } from "../aceternity/hover-border-gradient"
 
@@ -214,20 +213,10 @@ export function Hero() {
           </motion.a>
         </motion.div>
 
-        {/* Feature showcase - Remotion demo carousel */}
-        <motion.div
-          initial={{ opacity: 0, y: 30 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.8, delay: 0.6 }}
-          className="mt-16 flex justify-center"
-        >
-          <HeroShowcasePlayer />
-        </motion.div>
-
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ duration: 0.5, delay: 0.9 }}
+          transition={{ duration: 0.5, delay: 0.6 }}
           className="mt-6 text-sm text-text-muted"
         >
           Bring your own model. Fully configurable. MIT licensed.

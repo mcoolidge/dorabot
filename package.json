@@ -48,5 +48,6 @@
   },
   "engines": {
     "node": ">=22.0.0"
-  }
+  },
+  "repository": "github:suitedaces/dorabot"
 }
