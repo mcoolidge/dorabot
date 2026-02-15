@@ -137,8 +137,7 @@ export default function App() {
       switch (event.type) {
         case 'agent.result': {
           if (!windowFocused) {
-            const costStr = event.cost ? ` ($${event.cost.toFixed(4)})` : '';
-            new Notification('dorabot', { body: `agent finished${costStr}` });
+            new Notification('dorabot', { body: 'agent finished' });
             (window as any).electronAPI?.dockBounce?.('informational');
             playNotifSound();
           }

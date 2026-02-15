@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'node:http';
 import { createServer as createTlsServer } from 'node:https';
 import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, watch, type FSWatcher } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import { execSync } from 'node:child_process';
 import { resolve as pathResolve, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -254,12 +255,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         ws.send(data);
       }
     }
-    // buffer agent events for replay on reconnect
+    // buffer agent events for replay on reconnect (cap at 5000 to bound memory)
     const sk = (event.data as any)?.sessionKey as string | undefined;
     if (sk && typeof event.event === 'string' && event.event.startsWith('agent.') && event.event !== 'agent.error') {
       let buf = streamBuffers.get(sk);
       if (!buf) { buf = []; streamBuffers.set(sk, buf); }
-      buf.push(data);
+      if (buf.length < 5000) buf.push(data);
     }
   };
 
@@ -335,11 +336,15 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     ownerChatIds.set('telegram', config.channels.telegram.allowFrom[0]);
   }
 
+  let ownerChatIdsDirty = false;
   function persistOwnerChatIds() {
-    try {
+    if (ownerChatIdsDirty) return;
+    ownerChatIdsDirty = true;
+    setTimeout(() => {
+      ownerChatIdsDirty = false;
       const obj = Object.fromEntries(ownerChatIds);
-      writeFileSync(ownerChatIdsFile, JSON.stringify(obj, null, 2));
-    } catch {}
+      writeFile(ownerChatIdsFile, JSON.stringify(obj, null, 2)).catch(() => {});
+    }, 1000);
   }
   // queued messages for sessions with active runs
   const pendingMessages = new Map<string, InboundMessage[]>();
@@ -1030,6 +1035,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                       ctx.statusMsgId = sent.id;
                       statusMessages.set(sessionKey, { channel: ctx.channel, chatId: ctx.chatId, messageId: sent.id });
                       if (h.typing) {
+                        clearTypingInterval(ctx);
                         ctx.typingInterval = setInterval(() => { h.typing!(ctx.chatId).catch(() => {}); }, 4500);
                       }
                     } catch {}
@@ -1049,7 +1055,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                       tl.lastEditAt = now;
                       const text = buildToolStatusText(tl.completed, tl.current);
                       const h = getChannelHandler(sm.channel);
-                      if (h) { try { await h.edit(sm.messageId, text, sm.chatId); } catch {} }
+                      if (h) { h.edit(sm.messageId, text, sm.chatId).catch(() => {}); }
                     }
                   }
                 }
@@ -1081,7 +1087,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                   tl.lastEditAt = Date.now();
                   const text = buildToolStatusText(tl.completed, tl.current);
                   const h = getChannelHandler(sm.channel);
-                  if (h) { try { await h.edit(sm.messageId, text, sm.chatId); } catch {} }
+                  if (h) { h.edit(sm.messageId, text, sm.chatId).catch(() => {}); }
                 }
               }
             }
@@ -1125,7 +1131,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                     if (sm) {
                       const text = buildToolStatusText(tl.completed, tl.current);
                       const h = getChannelHandler(sm.channel);
-                      if (h) { try { await h.edit(sm.messageId, text, sm.chatId); } catch {} }
+                      if (h) { h.edit(sm.messageId, text, sm.chatId).catch(() => {}); }
                     }
                   }
                 }

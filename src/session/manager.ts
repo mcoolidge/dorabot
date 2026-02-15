@@ -136,32 +136,33 @@ export class SessionManager {
     const db = getDb();
     const now = new Date().toISOString();
 
-    // ensure session exists
-    db.prepare(`
-      INSERT INTO sessions (id, created_at, updated_at, message_count)
-      VALUES (?, ?, ?, 0)
-      ON CONFLICT(id) DO NOTHING
-    `).run(sessionId, now, now);
+    (this._appendTx ??= db.transaction((sid: string, msg: SessionMessage, ts: string) => {
+      db.prepare(`
+        INSERT INTO sessions (id, created_at, updated_at, message_count)
+        VALUES (?, ?, ?, 0)
+        ON CONFLICT(id) DO NOTHING
+      `).run(sid, ts, ts);
 
-    // insert message
-    db.prepare(`
-      INSERT INTO messages (session_id, uuid, type, content, metadata, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      sessionId,
-      message.uuid || null,
-      message.type,
-      JSON.stringify(message.content),
-      message.metadata ? JSON.stringify(message.metadata) : null,
-      message.timestamp,
-    );
+      db.prepare(`
+        INSERT INTO messages (session_id, uuid, type, content, metadata, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        sid,
+        msg.uuid || null,
+        msg.type,
+        JSON.stringify(msg.content),
+        msg.metadata ? JSON.stringify(msg.metadata) : null,
+        msg.timestamp,
+      );
 
-    // update timestamps (message_count is managed by sessionRegistry.incrementMessages)
-    db.prepare(`
-      UPDATE sessions SET updated_at = ?, last_message_at = ?
-      WHERE id = ?
-    `).run(now, Date.now(), sessionId);
+      db.prepare(`
+        UPDATE sessions SET updated_at = ?, last_message_at = ?
+        WHERE id = ?
+      `).run(ts, Date.now(), sid);
+    }))(sessionId, message, now);
   }
+
+  private _appendTx: ReturnType<ReturnType<typeof getDb>['transaction']> | null = null;
 
   save(sessionId: string, messages: SessionMessage[]): void {
     const db = getDb();

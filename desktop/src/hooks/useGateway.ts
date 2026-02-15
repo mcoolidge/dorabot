@@ -507,6 +507,40 @@ export function useGateway(url = 'wss://localhost:18789') {
     }
   }, [rpc]);
 
+  // --- Stream event batching (apply all queued deltas in one React update per frame) ---
+  type QueuedStreamEvent = { sk: string; evt: Record<string, unknown>; parentId?: string | null };
+  const streamQueueRef = useRef<QueuedStreamEvent[]>([]);
+  const streamRafRef = useRef<number | null>(null);
+
+  const flushStreamQueue = useCallback(() => {
+    streamRafRef.current = null;
+    const queue = streamQueueRef.current;
+    if (!queue.length) return;
+    streamQueueRef.current = [];
+
+    setSessionStates(prev => {
+      let next = prev;
+      for (const { sk, evt, parentId } of queue) {
+        if (parentId) {
+          next = updateSessionChatItems(next, sk, items => {
+            for (let i = items.length - 1; i >= 0; i--) {
+              const it = items[i];
+              if (it.type === 'tool_use' && it.id === parentId) {
+                const updated = [...items];
+                updated[i] = { ...it, subItems: applyStreamEvent(it.subItems || [], evt) };
+                return updated;
+              }
+            }
+            return items;
+          });
+        } else {
+          next = updateSessionChatItems(next, sk, items => applyStreamEvent(items, evt));
+        }
+      }
+      return next;
+    });
+  }, []);
+
   // --- Event handling (routes to all tracked sessions) ---
 
   const handleEvent = useCallback((event: GatewayEvent) => {
@@ -553,26 +587,12 @@ export function useGateway(url = 'wss://localhost:18789') {
         if (!sk || !trackedSessionsRef.current.has(sk)) break;
         const evt = d.event;
         if (!evt) break;
-        const parentId = d.parentToolUseId;
 
-        if (parentId) {
-          // subagent event — route into parent tool_use's subItems
-          setSessionStates(prev => updateSessionChatItems(prev, sk, items => {
-            for (let i = items.length - 1; i >= 0; i--) {
-              const it = items[i];
-              if (it.type === 'tool_use' && it.id === parentId) {
-                const updated = [...items];
-                updated[i] = { ...it, subItems: applyStreamEvent(it.subItems || [], evt) };
-                return updated;
-              }
-            }
-            return items;
-          }));
-          break;
+        // batch stream events, flush once per animation frame
+        streamQueueRef.current.push({ sk, evt, parentId: d.parentToolUseId });
+        if (streamRafRef.current === null) {
+          streamRafRef.current = requestAnimationFrame(flushStreamQueue);
         }
-
-        // top-level event
-        setSessionStates(prev => updateSessionChatItems(prev, sk, items => applyStreamEvent(items, evt)));
         break;
       }
 
@@ -580,6 +600,12 @@ export function useGateway(url = 'wss://localhost:18789') {
         const d = data as { sessionKey?: string; sessionId: string; result: string; usage?: { totalCostUsd?: number } };
         const sk = d.sessionKey;
         if (!sk || !trackedSessionsRef.current.has(sk)) break;
+        // flush any pending stream deltas before marking streaming:false
+        if (streamRafRef.current !== null) {
+          cancelAnimationFrame(streamRafRef.current);
+          streamRafRef.current = null;
+        }
+        flushStreamQueue();
         setSessionStates(prev => {
           const state = prev[sk];
           if (!state) return prev;
@@ -944,7 +970,7 @@ export function useGateway(url = 'wss://localhost:18789') {
         break;
       }
     }
-  }, []);
+  }, [flushStreamQueue]);
 
   const connect = useCallback(() => {
     // close any existing connection first
@@ -1041,6 +1067,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     connect();
     return () => {
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (streamRafRef.current !== null) cancelAnimationFrame(streamRafRef.current);
       if (wsRef.current) {
         wsRef.current.onclose = null;
         wsRef.current.close();
@@ -1359,37 +1386,46 @@ export function useGateway(url = 'wss://localhost:18789') {
   const currentSessionId = activeState.sessionId;
   const pendingQuestion = activeState.pendingQuestion;
 
-  const progress = useMemo<ProgressItem[]>(() => {
+  // find the last TodoWrite / AskUserQuestion inputs (cheap scan, no parsing)
+  const lastTodoInput = useMemo(() => {
     for (let i = chatItems.length - 1; i >= 0; i--) {
       const item = chatItems[i];
-      if (item.type === 'tool_use' && item.name === 'TodoWrite') {
-        try {
-          const parsed = item.streaming
-            ? JSON.parse(jsonrepair(item.input))
-            : JSON.parse(item.input);
-          return parsed.todos || [];
-        } catch { return []; }
-      }
-    }
-    return [];
-  }, [chatItems]);
-
-  // derive streaming question from AskUserQuestion tool_use in chat items
-  const streamingQuestion = useMemo<AskUserQuestion['questions'] | null>(() => {
-    for (let i = chatItems.length - 1; i >= 0; i--) {
-      const item = chatItems[i];
-      if (item.type === 'tool_use' && item.name === 'AskUserQuestion' && item.streaming) {
-        try {
-          const parsed = JSON.parse(jsonrepair(item.input));
-          const qs = parsed.questions;
-          if (!Array.isArray(qs) || qs.length === 0) return null;
-          const valid = qs.filter((q: any) => q?.question && Array.isArray(q?.options));
-          return valid.length > 0 ? valid : null;
-        } catch { return null; }
-      }
+      if (item.type === 'tool_use' && item.name === 'TodoWrite')
+        return { input: item.input, streaming: !!item.streaming };
     }
     return null;
   }, [chatItems]);
+
+  const lastAskInput = useMemo(() => {
+    for (let i = chatItems.length - 1; i >= 0; i--) {
+      const item = chatItems[i];
+      if (item.type === 'tool_use' && item.name === 'AskUserQuestion' && item.streaming)
+        return item.input;
+    }
+    return null;
+  }, [chatItems]);
+
+  // only run jsonrepair when the relevant input actually changes
+  const progress = useMemo<ProgressItem[]>(() => {
+    if (!lastTodoInput) return [];
+    try {
+      const parsed = lastTodoInput.streaming
+        ? JSON.parse(jsonrepair(lastTodoInput.input))
+        : JSON.parse(lastTodoInput.input);
+      return parsed.todos || [];
+    } catch { return []; }
+  }, [lastTodoInput]);
+
+  const streamingQuestion = useMemo<AskUserQuestion['questions'] | null>(() => {
+    if (!lastAskInput) return null;
+    try {
+      const parsed = JSON.parse(jsonrepair(lastAskInput));
+      const qs = parsed.questions;
+      if (!Array.isArray(qs) || qs.length === 0) return null;
+      const valid = qs.filter((q: any) => q?.question && Array.isArray(q?.options));
+      return valid.length > 0 ? valid : null;
+    } catch { return null; }
+  }, [lastAskInput]);
 
   return {
     connectionState,

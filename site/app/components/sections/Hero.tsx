@@ -142,52 +142,62 @@ export function Hero() {
           </span>
         </motion.h1>
 
-        {/* Capability cards */}
+        {/* Subtitle with provider logos + action icons */}
         <motion.div
-          initial={{ opacity: 0, y: 16 }}
+          initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.25 }}
-          className="mx-auto mt-10 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5 max-w-3xl"
+          className="mx-auto mt-7 max-w-2xl text-base sm:text-lg leading-[1.8] sm:leading-[1.9]"
         >
-          {[
-            { icon: <WhatsAppLogo className="h-4 w-4" />, label: "WhatsApp" },
-            { icon: <TelegramLogo className="h-4 w-4" />, label: "Telegram" },
-            { icon: <SlackLogo className="h-4 w-4" />, label: "Slack" },
-            { icon: <BrowserLogo className="h-4 w-4" />, label: "Browser automation" },
-            { icon: <EmailLogo className="h-4 w-4" />, label: "Email" },
-            { icon: <AppleLogo className="h-4 w-4" />, label: "Mac control" },
-            { icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4"><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11" /></svg>, label: "Proactive goals" },
-            { icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4"><path d="M12 2a3 3 0 00-3 3v1a3 3 0 006 0V5a3 3 0 00-3-3z" /><path d="M19 9H5a2 2 0 00-2 2v1a2 2 0 002 2h14a2 2 0 002-2v-1a2 2 0 00-2-2z" /><path d="M12 14v4M7 22h10M12 18v4" /></svg>, label: "Persistent memory" },
-            { icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4"><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" strokeWidth={2} strokeLinecap="round" /></svg>, label: "Scheduling" },
-            { icon: <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4"><path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" /></svg>, label: "GitHub" },
-            { icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="M9 12l2 2 4-4" /></svg>, label: "Runs locally" },
-            { icon: <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4"><path d="M12 2L2 7l10 5 10-5-10-5z" /><path d="M2 17l10 5 10-5" /><path d="M2 12l10 5 10-5" /></svg>, label: "56k+ skills" },
-          ].map((item, i) => (
-            <div
-              key={i}
-              className="flex items-center gap-2.5 rounded-lg border border-border bg-bg-card/40 glass px-3 py-2"
-            >
-              <span className="text-accent flex-shrink-0">{item.icon}</span>
-              <span className="text-sm text-text-secondary truncate">{item.label}</span>
-            </div>
-          ))}
+          <p className="text-text-secondary">
+            Compatible with{" "}
+            <span className="inline-flex items-center gap-1.5 text-text font-medium">
+              <svg viewBox="0 0 256 257" className="h-[1.1em] w-[1.1em] inline"><path d="M50.228 170.321 100.585 142.064l.843-2.463-.843-1.361h-2.463l-8.425-.518-28.776-.778-24.952-1.037-24.174-1.296-6.092-1.296L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.102 24.304 1.685 17.628 1.037 26.119 2.722h4.148l.583-1.685-1.426-1.037-1.101-.963-25.146-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.759 7-7.712 9.397.648 2.398.648 9.527 7.323 20.35 15.749 26.572 19.573 3.889 3.24 1.555-1.101.195-.778-1.75-2.916-14.452-26.119-15.425-26.572-6.87-11.018-1.814-6.61c-.649-2.722-1.102-4.99-1.102-7.777l7.971-10.824 4.408-1.426 10.629 1.426 4.471 3.889 6.611 15.1 10.694 23.786 16.591 32.34 4.86 9.592 8.566 8.879.973 2.722h1.685v-1.556l1.361-18.211 2.528-22.36 2.462-28.775.843-8.101 4.018-9.722 7.971-5.25 6.222 2.982 5.12 7.324-.713 4.731-2.333 19.767-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.035 7.777-8.749 9.074-9.657 5.832-4.601 11.018 0 8.101 12.055-3.63 12.443-11.341 14.388-9.397 12.184-13.481 18.147-8.425 14.517.778 1.167 2.009-.195 30.461-6.481 16.462-2.981 19.637-3.37 8.879 4.148.973 4.212-3.5 8.62-21 5.184-24.627 4.926-36.683 8.684-.454.324.519.648 16.527 1.556 7.063.388 17.305 0 32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.499-4.148-40.83-9.722-13.999-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.361 6.157-3.435 4.86-3.63-.518-23.525-17.693-9.074-7.972-20.544-17.304-1.361 0v1.815l4.731 6.934 25.017 37.59 1.296 11.536-1.815 3.759-6.481 2.268-7.129-1.296-14.647-20.545-15.1-23.137-12.184-20.739-1.491.843-7.194 77.29-3.37 3.953-7.777 2.982-6.481-4.926-3.435-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.286 1.815-6.74-.13-.454-1.491.195-15.296 21-23.266 31.433-18.406 19.702-4.407 1.75-7.648-3.953.713-7.064 4.277-6.287 25.471-32.405 15.36-20.091 9.916-11.601-.065-1.685-.583 0L44.071 198.125l-12.055 1.555-5.184-4.86.648-7.972 2.462-2.593 20.35-13.999-.064-.065Z" fill="#D97757"/></svg>
+              Claude Code
+            </span>{" "}
+            and{" "}
+            <span className="inline-flex items-center gap-1.5 text-text font-medium">
+              <svg viewBox="0 0 24 24" fill="currentColor" className="h-[1em] w-[1em] text-[#10A37F] inline"><path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z"/></svg>
+              Codex
+            </span>.
+          </p>
+          <p className="mt-2 text-text-secondary">
+            Give your model{" "}
+            <span className="inline-flex items-center gap-1 text-text font-medium">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4 text-accent"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" /></svg>
+              messaging
+            </span>,{" "}
+            <span className="inline-flex items-center gap-1 text-text font-medium">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4 text-accent"><rect x="2" y="3" width="20" height="18" rx="2" /><path d="M2 9h20" /></svg>
+              browsing
+            </span>,{" "}
+            <span className="inline-flex items-center gap-1 text-text font-medium">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4 text-accent"><rect x="2" y="4" width="20" height="16" rx="2" /><path d="M22 7l-8.97 5.7a1.94 1.94 0 01-2.06 0L2 7" /></svg>
+              email
+            </span>,{" "}
+            <span className="inline-flex items-center gap-1 text-text font-medium">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4 text-accent"><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></svg>
+              scheduling
+            </span>,{" "}
+            and{" "}
+            <span className="inline-flex items-center gap-1 text-text font-medium">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className="h-4 w-4 text-accent"><path d="M12 2a3 3 0 00-3 3v1a3 3 0 006 0V5a3 3 0 00-3-3z" /><path d="M19 9H5a2 2 0 00-2 2v1a2 2 0 002 2h14a2 2 0 002-2v-1a2 2 0 00-2-2z" /><path d="M12 14v4M7 22h10M12 18v4" /></svg>
+              memory
+            </span>.
+            Ships with a{" "}
+            <span className="inline-flex items-center gap-1 text-text font-medium">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4 text-accent"><rect x="2" y="3" width="20" height="14" rx="2" /><path d="M8 21h8M12 17v4" /></svg>
+              desktop app
+            </span>.
+            Runs entirely on your machine.
+          </p>
         </motion.div>
-
-        {/* Privacy line */}
-        <motion.p
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.6, delay: 0.35 }}
-          className="mt-5 text-base font-medium text-text"
-        >
-          Your data is yours.
-        </motion.p>
 
         {/* CTA buttons */}
         <motion.div
           initial={{ opacity: 0, y: 16 }}
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.45 }}
+          transition={{ duration: 0.6, delay: 0.4 }}
           className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center"
         >
           <a href="https://github.com/suitedaces/dorabot">
@@ -216,10 +226,10 @@ export function Hero() {
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ duration: 0.5, delay: 0.6 }}
+          transition={{ duration: 0.5, delay: 0.5 }}
           className="mt-6 text-sm text-text-muted"
         >
-          Bring your own model. Fully configurable. MIT licensed.
+          Open source. MIT licensed. 5 commands to install.
         </motion.div>
       </div>
 
