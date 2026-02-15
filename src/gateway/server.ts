@@ -645,6 +645,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     },
   });
 
+  // backfill FTS search index for memory_search tool (runs once, skips if already done)
+  try {
+    const { backfillFtsIndex } = await import('../db.js');
+    backfillFtsIndex();
+  } catch (err) {
+    console.error('[gateway] FTS backfill failed:', err);
+  }
+
   // calendar scheduler
   let scheduler: SchedulerRunner | null = null;
   if (config.calendar?.enabled !== false && config.cron?.enabled !== false) {
@@ -1414,6 +1422,50 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           return { id, result: { aborted: true, sessionKey: sk } };
         }
 
+        case 'agent.interrupt': {
+          const sk = params?.sessionKey as string;
+          if (!sk) return { id, error: 'sessionKey required' };
+          const h = runHandles.get(sk);
+          if (!h?.active) return { id, error: 'no active run for that session' };
+          if (!h.interrupt) return { id, error: 'interrupt not supported by current provider' };
+          await h.interrupt();
+          return { id, result: { interrupted: true, sessionKey: sk } };
+        }
+
+        case 'agent.setModel': {
+          const sk = params?.sessionKey as string;
+          const model = params?.model as string;
+          if (!sk) return { id, error: 'sessionKey required' };
+          if (!model) return { id, error: 'model required' };
+          const h = runHandles.get(sk);
+          if (!h?.active) return { id, error: 'no active run for that session' };
+          if (!h.setModel) return { id, error: 'setModel not supported by current provider' };
+          await h.setModel(model);
+          return { id, result: { model, sessionKey: sk } };
+        }
+
+        case 'agent.stopTask': {
+          const sk = params?.sessionKey as string;
+          const taskId = params?.taskId as string;
+          if (!sk) return { id, error: 'sessionKey required' };
+          if (!taskId) return { id, error: 'taskId required' };
+          const h = runHandles.get(sk);
+          if (!h?.active) return { id, error: 'no active run for that session' };
+          if (!h.stopTask) return { id, error: 'stopTask not supported by current provider' };
+          await h.stopTask(taskId);
+          return { id, result: { stopped: true, taskId, sessionKey: sk } };
+        }
+
+        case 'agent.mcpStatus': {
+          const sk = params?.sessionKey as string;
+          if (!sk) return { id, error: 'sessionKey required' };
+          const h = runHandles.get(sk);
+          if (!h?.active) return { id, error: 'no active run for that session' };
+          if (!h.mcpServerStatus) return { id, error: 'mcpServerStatus not supported by current provider' };
+          const status = await h.mcpServerStatus();
+          return { id, result: status };
+        }
+
         case 'chat.answerQuestion': {
           const requestId = params?.requestId as string;
           const answers = params?.answers as Record<string, string>;
@@ -2007,7 +2059,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
 
           if (key === 'permissionMode' && typeof value === 'string') {
-            const valid = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk'];
+            const valid = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'delegate'];
             if (!valid.includes(value)) return { id, error: `permissionMode must be one of: ${valid.join(', ')}` };
             config.permissionMode = value as any;
             saveConfig(config);
@@ -2062,8 +2114,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
           // provider config keys
           if (key === 'provider.name' && typeof value === 'string') {
-            if (!['claude', 'codex'].includes(value)) {
-              return { id, error: 'provider.name must be "claude" or "codex"' };
+            if (!['claude', 'codex', 'minimax'].includes(value)) {
+              return { id, error: 'provider.name must be "claude", "codex", or "minimax"' };
             }
             config.provider.name = value as ProviderName;
             saveConfig(config);
@@ -2077,6 +2129,35 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               return { id, error: `reasoningEffort must be one of: ${valid.filter(Boolean).join(', ')} (or null to clear)` };
             }
             config.reasoningEffort = value as any;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'thinking') {
+            // value: 'adaptive' | 'disabled' | null | { type: 'enabled', budgetTokens: number }
+            if (value === null || value === undefined) {
+              config.thinking = undefined;
+            } else if (value === 'adaptive' || value === 'disabled') {
+              config.thinking = value;
+            } else if (typeof value === 'object' && (value as any).type === 'enabled' && typeof (value as any).budgetTokens === 'number') {
+              config.thinking = value as any;
+            } else {
+              return { id, error: 'thinking must be "adaptive", "disabled", null, or { type: "enabled", budgetTokens: number }' };
+            }
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'maxBudgetUsd') {
+            if (value === null || value === undefined) {
+              config.maxBudgetUsd = undefined;
+            } else if (typeof value === 'number' && value > 0) {
+              config.maxBudgetUsd = value;
+            } else {
+              return { id, error: 'maxBudgetUsd must be a positive number or null to clear' };
+            }
             saveConfig(config);
             broadcast({ event: 'config.update', data: { key, value } });
             return { id, result: { key, value } };

@@ -389,6 +389,9 @@ export class ClaudeProvider implements Provider {
     }
 
     // Create RunHandle for the gateway to inject messages
+    // SDK query methods are attached after q is created (deferred binding)
+    let queryRef: ReturnType<typeof query> | null = null;
+
     const handle: RunHandle = {
       get active() { return !closed; },
       inject(text: string): boolean {
@@ -403,15 +406,44 @@ export class ClaudeProvider implements Provider {
       },
       close() {
         closed = true;
-        // Unblock the generator if it's suspended in await
         if (waitingForMessage) {
           waitingForMessage(makeUserMsg(''));
         }
       },
+      async interrupt() { await queryRef?.interrupt(); },
+      async setModel(model: string) { await queryRef?.setModel(model); },
+      async setPermissionMode(mode: string) { await queryRef?.setPermissionMode(mode as any); },
+      async stopTask(taskId: string) { await queryRef?.stopTask(taskId); },
+      async mcpServerStatus() { return queryRef?.mcpServerStatus() ?? []; },
+      async reconnectMcpServer(name: string) { await queryRef?.reconnectMcpServer(name); },
+      async toggleMcpServer(name: string, enabled: boolean) { await queryRef?.toggleMcpServer(name, enabled); },
     };
 
     // Notify caller that the handle is ready (before SDK query starts)
     opts.onRunReady?.(handle);
+
+    // ── Map effort + thinking config ──────────────────────────────────
+    const EFFORT_MAP: Record<string, 'low' | 'medium' | 'high' | 'max'> = {
+      minimal: 'low',
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      max: 'max',
+    };
+    const effort = opts.config.reasoningEffort
+      ? EFFORT_MAP[opts.config.reasoningEffort]
+      : undefined;
+
+    // Build thinking config
+    let thinking: { type: 'adaptive' } | { type: 'enabled'; budgetTokens: number } | { type: 'disabled' } | undefined;
+    const thinkingCfg = opts.config.thinking;
+    if (thinkingCfg === 'adaptive') {
+      thinking = { type: 'adaptive' };
+    } else if (thinkingCfg === 'disabled') {
+      thinking = { type: 'disabled' };
+    } else if (thinkingCfg && typeof thinkingCfg === 'object' && 'type' in thinkingCfg) {
+      thinking = thinkingCfg as any;
+    }
 
     // ── SDK query with async generator prompt ───────────────────────
     const q = query({
@@ -430,12 +462,18 @@ export class ClaudeProvider implements Provider {
         cwd: opts.cwd,
         env: opts.env,
         maxTurns: opts.maxTurns,
+        maxBudgetUsd: opts.config.maxBudgetUsd,
+        effort,
+        thinking,
         includePartialMessages: true,
         canUseTool: opts.canUseTool as any,
         abortController: opts.abortController,
         stderr: (data: string) => console.error(`[claude:stderr] ${data.trimEnd()}`),
       },
     });
+
+    // Bind SDK query methods to the handle for gateway access
+    queryRef = q;
 
     let result = '';
     let sessionId = '';

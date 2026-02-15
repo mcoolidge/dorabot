@@ -1,5 +1,5 @@
 import type { Config } from '../config.js';
-import { getDb } from '../db.js';
+import { getDb, indexMessageForSearch } from '../db.js';
 
 export type SessionMetadata = {
   channel?: string;
@@ -135,31 +135,35 @@ export class SessionManager {
   append(sessionId: string, message: SessionMessage): void {
     const db = getDb();
     const now = new Date().toISOString();
+    const contentStr = JSON.stringify(message.content);
 
-    (this._appendTx ??= db.transaction((sid: string, msg: SessionMessage, ts: string) => {
+    (this._appendTx ??= db.transaction((sid: string, msg: SessionMessage, ts: string, content: string) => {
       db.prepare(`
         INSERT INTO sessions (id, created_at, updated_at, message_count)
         VALUES (?, ?, ?, 0)
         ON CONFLICT(id) DO NOTHING
       `).run(sid, ts, ts);
 
-      db.prepare(`
+      const result = db.prepare(`
         INSERT INTO messages (session_id, uuid, type, content, metadata, timestamp)
         VALUES (?, ?, ?, ?, ?, ?)
       `).run(
         sid,
         msg.uuid || null,
         msg.type,
-        JSON.stringify(msg.content),
+        content,
         msg.metadata ? JSON.stringify(msg.metadata) : null,
         msg.timestamp,
       );
+
+      // index for FTS search
+      indexMessageForSearch(Number(result.lastInsertRowid), content, msg.type);
 
       db.prepare(`
         UPDATE sessions SET updated_at = ?, last_message_at = ?
         WHERE id = ?
       `).run(ts, Date.now(), sid);
-    }))(sessionId, message, now);
+    }))(sessionId, message, now, contentStr);
   }
 
   private _appendTx: ReturnType<ReturnType<typeof getDb>['transaction']> | null = null;

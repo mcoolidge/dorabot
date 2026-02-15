@@ -4,6 +4,7 @@ import { calendarTools } from './calendar.js';
 import { screenshotTool } from './screenshot.js';
 import { browserTool } from './browser.js';
 import { goalsTools } from './goals.js';
+import { memoryTools } from './memory.js';
 
 export { messageTool, registerChannelHandler, getChannelHandler, type ChannelHandler } from './messaging.js';
 export { setScheduler, getScheduler } from './calendar.js';
@@ -18,6 +19,7 @@ const customTools = [
   browserTool,
   ...calendarTools,
   ...goalsTools,
+  ...memoryTools,
 ];
 
 export function createAgentMcpServer() {

@@ -4,7 +4,7 @@ import { join, dirname, resolve } from 'node:path';
 
 let loadedConfigPath: string | undefined;
 
-export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk';
+export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'dontAsk' | 'delegate';
 
 export type SandboxMode = 'off' | 'non-main' | 'all';
 export type SandboxScope = 'session' | 'agent' | 'shared';
@@ -102,9 +102,11 @@ export type SecurityConfig = {
   tools?: ToolPolicyConfig;
 };
 
-export type ProviderName = 'claude' | 'codex';
+export type ProviderName = 'claude' | 'codex' | 'minimax';
 
 export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'max';
+
+export type ThinkingMode = 'adaptive' | 'disabled' | { type: 'enabled'; budgetTokens: number };
 
 export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 export type CodexApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'untrusted';
@@ -128,6 +130,8 @@ export type Config = {
   provider: ProviderConfig;
   model: string;
   reasoningEffort?: ReasoningEffort;
+  thinking?: ThinkingMode;
+  maxBudgetUsd?: number;
   permissionMode: PermissionMode;
   autonomy?: AutonomyMode;
   skills: {
