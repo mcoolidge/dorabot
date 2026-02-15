@@ -1780,8 +1780,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!scheduler) return { id, error: 'scheduler not enabled' };
           const itemId = params?.id as string;
           if (!itemId) return { id, error: 'id required' };
-          const runResult = await scheduler.runItemNow(itemId);
-          return { id, result: runResult };
+          // fire and forget — agent runs can take minutes, don't block the RPC
+          scheduler.runItemNow(itemId).catch(err => {
+            console.error(`[gateway] calendar run failed for ${itemId}:`, err);
+          });
+          return { id, result: { status: 'started' } };
         }
 
         case 'calendar.update': {

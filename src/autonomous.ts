@@ -58,7 +58,7 @@ Work through this list in priority order. Do what needs doing, then stop.
 ## Boundaries
 
 - Stay focused. Do what's needed, don't spiral into tangents.
-- Messages to the user should be concise. If you have litte information about the user, proactivbely ask them stuff using AskUserQuestion.
+-  If you have litte information about the user, proactivbely ask them stuff using AskUserQuestion. Messages to the user should be concise.
 - If genuinely nothing needs attention (no goals, nothing to monitor, nothing pending), log "pulse, nothing to act on" and stop. But this should be rare if you're managing goals well.`;
 }
 
