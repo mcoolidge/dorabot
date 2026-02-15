@@ -151,9 +151,13 @@ export function indexMessageForSearch(messageRowId: number, content: string, typ
 export function backfillFtsIndex(): void {
   const d = getDb();
 
-  // check if already backfilled
-  const count = (d.prepare('SELECT COUNT(*) as c FROM messages_fts').get() as { c: number }).c;
-  if (count > 0) return; // already indexed
+  // check if already backfilled (with actual content, not empty rows from a broken build)
+  const sample = d.prepare("SELECT text_content FROM messages_fts LIMIT 1").get() as { text_content: string | null } | undefined;
+  if (sample?.text_content) return;
+
+  // drop and recreate to clear empty rows from previous broken backfill
+  d.exec('DROP TABLE IF EXISTS messages_fts');
+  d.exec("CREATE VIRTUAL TABLE messages_fts USING fts5(text_content, content='', tokenize='porter unicode61')");
 
   console.log('[db] backfilling FTS index...');
   const rows = d.prepare('SELECT id, content, type FROM messages WHERE type IN (\'user\', \'assistant\', \'result\') ORDER BY id').all() as { id: number; content: string; type: string }[];

@@ -239,15 +239,15 @@ export default function App() {
 
   const handleNavClick = useCallback((navId: TabType) => {
     if (navId === 'chat') {
+      // if already on a chat tab, stay there
       if (tabState.activeTab && isChatTab(tabState.activeTab)) {
-        tabState.newChatTab();
+        return;
+      }
+      const existingChat = tabState.tabs.find(t => isChatTab(t));
+      if (existingChat) {
+        tabState.focusTab(existingChat.id);
       } else {
-        const existingChat = tabState.tabs.find(t => isChatTab(t));
-        if (existingChat) {
-          tabState.focusTab(existingChat.id);
-        } else {
-          tabState.newChatTab();
-        }
+        tabState.newChatTab();
       }
     } else {
       tabState.openViewTab(navId, NAV_ITEMS.find(n => n.id === navId)?.label || navId);

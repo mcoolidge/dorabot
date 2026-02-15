@@ -582,7 +582,7 @@ export async function browserStop(): Promise<ActionResult> {
 }
 
 // open / navigate alias
-export async function browserOpen(config: BrowserConfig, url: string, timeout?: number): Promise<ActionResult> {
+export async function browserOpen(config: BrowserConfig, url: string, timeout?: number, includeSnapshot?: boolean): Promise<ActionResult> {
   const page = await ensureBrowser(config);
   ensureRuntime(page);
   clearRefs();
@@ -593,7 +593,8 @@ export async function browserOpen(config: BrowserConfig, url: string, timeout?: 
   });
 
   const title = await page.title().catch(() => '(unavailable)');
-  return ok(`Navigated to: ${url}\nTitle: ${title}`);
+  const suffix = await appendSnapshotIfNeeded(includeSnapshot);
+  return ok(`Navigated to: ${url}\nTitle: ${title}${suffix}`);
 }
 
 // take_snapshot
@@ -1070,6 +1071,21 @@ export async function browserWaitForText(text: string, timeout?: number): Promis
   }
 }
 
+async function compactPageList(): Promise<string> {
+  const ctx = getContext();
+  if (!ctx) return '';
+  const pages = ctx.pages();
+  const current = getPage();
+  const lines = await Promise.all(
+    pages.map(async (page, idx) => {
+      const sel = page === current ? ' [selected]' : '';
+      const title = await page.title().catch(() => '');
+      return `  ${idx}: ${page.url()}${title ? ` (${title})` : ''}${sel}`;
+    }),
+  );
+  return `\nPages:\n${lines.join('\n')}`;
+}
+
 // list_pages
 export async function browserListPages(): Promise<ActionResult> {
   const ctx = getContext();
@@ -1108,7 +1124,8 @@ export async function browserSelectPage(pageId: number, bringToFront?: boolean):
 
   const pages = ctx.pages();
   if (pageId < 0 || pageId >= pages.length) {
-    return err(`Page ${pageId} not found`);
+    const list = await compactPageList();
+    return err(`Page ${pageId} not found${list}`);
   }
 
   const page = pages[pageId];
@@ -1120,7 +1137,8 @@ export async function browserSelectPage(pageId: number, bringToFront?: boolean):
   }
 
   clearRefs();
-  return ok(`Selected page ${pageId}: ${page.url()}`);
+  const list = await compactPageList();
+  return ok(`Selected page ${pageId}: ${page.url()}${list}`);
 }
 
 // new_page
@@ -1149,7 +1167,8 @@ export async function browserNewPage(
 
   clearRefs();
   const pageId = ctx.pages().indexOf(page);
-  return ok(`New page opened (pageId=${pageId}, background=${!!background}): ${url}`);
+  const list = await compactPageList();
+  return ok(`New page opened (pageId=${pageId}, background=${!!background}): ${url}${list}`);
 }
 
 // close_page
@@ -1186,7 +1205,8 @@ export async function browserClosePage(pageId?: number): Promise<ActionResult> {
   }
 
   clearRefs();
-  return ok(`Closed page: ${closingUrl}`);
+  const list = await compactPageList();
+  return ok(`Closed page: ${closingUrl}${list}`);
 }
 
 // backward-compatible alias
@@ -1202,6 +1222,7 @@ export async function browserNavigatePage(opts: {
   ignoreCache?: boolean;
   handleBeforeUnload?: 'accept' | 'decline';
   initScript?: string;
+  includeSnapshot?: boolean;
 }): Promise<ActionResult> {
   const page = await getSelectedPage();
   if (!page) return err('Browser not running');
@@ -1291,8 +1312,9 @@ export async function browserNavigatePage(opts: {
     }
 
     clearRefs();
+    const suffix = await appendSnapshotIfNeeded(opts.includeSnapshot);
     const initScriptWarning = usedAddInitScript ? '\nNote: initScript was added via fallback and will persist on this page.' : '';
-    return ok(`Navigation complete (${type}). Current URL: ${page.url()}${initScriptWarning}`);
+    return ok(`Navigation complete (${type}). Current URL: ${page.url()}${initScriptWarning}${suffix}`);
   } catch (e) {
     return err(`Navigation failed: ${errorMessage(e)}`);
   } finally {
