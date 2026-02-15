@@ -24,17 +24,18 @@ export function Navbar() {
       ]}
       logo={
         <div className="flex items-center gap-3">
-          <img src="/dorabot.png" alt="dorabot" className="h-10 w-10 sm:h-11 sm:w-11 dorabot-alive" />
+          <img src="/dorabot.png" alt="dorabot" className="h-12 w-12 sm:h-14 sm:w-14 dorabot-alive" />
           <span className="text-base sm:text-lg font-bold tracking-tight text-text">dorabot</span>
         </div>
       }
       action={
         <a
           href="https://github.com/suitedaces/dorabot"
-          className="inline-flex items-center gap-2 rounded-lg border border-border bg-bg-card px-4 py-2 text-sm font-medium text-text-secondary hover:text-text hover:border-border-hover transition-all"
+          className="star-glow inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-bg-card px-4 py-2 text-sm font-medium text-text"
         >
           <GithubIcon />
           <span className="hidden sm:inline">Star on GitHub</span>
+          <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4 text-yellow-400"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
         </a>
       }
     />
