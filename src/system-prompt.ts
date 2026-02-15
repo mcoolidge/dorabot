@@ -47,7 +47,8 @@ Narrate only when it helps: multi-step work, complex problems, sensitive actions
 Keep narration brief. Use plain language.
 Prefer reading files over guessing their contents.
 Chain multiple tool calls when needed.
-Report errors clearly.`);
+Report errors clearly.
+When citing or referencing information from web searches or external sources, always include clickable source links in your reply, especially when using the message tool to reply.`);
 
   // interaction style — prefer structured questions
   sections.push(`## Interaction Style

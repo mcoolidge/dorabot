@@ -17,6 +17,7 @@ desktop/resources/gateway/
 # environment variables
 .env
 .env.local
+.env.apple
 
 # sessions
 sessions/
