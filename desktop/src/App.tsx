@@ -27,6 +27,34 @@ import {
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
 
+// soft two-tone chime via web audio api
+function playNotifSound() {
+  try {
+    const ctx = new AudioContext();
+    const now = ctx.currentTime;
+    const gain = ctx.createGain();
+    gain.connect(ctx.destination);
+    gain.gain.setValueAtTime(0.12, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+
+    const o1 = ctx.createOscillator();
+    o1.type = 'sine';
+    o1.frequency.setValueAtTime(880, now);
+    o1.connect(gain);
+    o1.start(now);
+    o1.stop(now + 0.15);
+
+    const o2 = ctx.createOscillator();
+    o2.type = 'sine';
+    o2.frequency.setValueAtTime(1320, now + 0.12);
+    o2.connect(gain);
+    o2.start(now + 0.12);
+    o2.stop(now + 0.5);
+
+    o2.onended = () => ctx.close();
+  } catch {}
+}
+
 const NAV_ITEMS: { id: TabType; label: string; icon: React.ReactNode }[] = [
   { id: 'chat', label: 'Task', icon: <MessageSquare className="w-3.5 h-3.5" /> },
   { id: 'channels', label: 'Channels', icon: <Radio className="w-3.5 h-3.5" /> },
@@ -100,17 +128,6 @@ export default function App() {
     }
   }, [gw.connectionState, gw.providerInfo]);
 
-  const prevNotifCount = useRef(0);
-  useEffect(() => {
-    if (gw.notifications.length > prevNotifCount.current) {
-      const latest = gw.notifications[gw.notifications.length - 1];
-      if (latest) {
-        const name = latest.toolName.replace('mcp__dorabot__', '');
-        toast(name, { description: 'executing...', duration: 3000 });
-      }
-    }
-    prevNotifCount.current = gw.notifications.length;
-  }, [gw.notifications]);
 
   // subscribe to notifiable gateway events for toasts + OS notifications
   useEffect(() => {
@@ -119,44 +136,34 @@ export default function App() {
 
       switch (event.type) {
         case 'agent.result': {
-          const costStr = event.cost ? ` ($${event.cost.toFixed(4)})` : '';
-          toast.success('agent finished', { description: event.sessionKey.split(':').pop() + costStr, duration: 4000 });
           if (!windowFocused) {
+            const costStr = event.cost ? ` ($${event.cost.toFixed(4)})` : '';
             new Notification('dorabot', { body: `agent finished${costStr}` });
             (window as any).electronAPI?.dockBounce?.('informational');
+            playNotifSound();
           }
           break;
         }
-        case 'agent.error':
-          toast.error('agent error', { description: event.error.slice(0, 120), duration: 6000 });
-          if (!windowFocused) {
-            new Notification('dorabot', { body: `agent error: ${event.error.slice(0, 80)}` });
-          }
-          break;
         case 'tool_approval':
           toast.warning('approval needed', { description: event.toolName, duration: 10000 });
-          new Notification('dorabot', { body: `approve tool: ${event.toolName}` });
+          if (!windowFocused) {
+            new Notification('dorabot', { body: `approve tool: ${event.toolName}` });
+          }
           (window as any).electronAPI?.dockBounce?.('critical');
-          break;
-        case 'goals.update':
-          toast('goals updated', { duration: 3000 });
-          break;
-        case 'whatsapp.status':
-          toast(event.status === 'connected' ? 'whatsapp connected' : 'whatsapp disconnected', { duration: 3000 });
-          break;
-        case 'telegram.status':
-          toast(event.status === 'linked' ? 'telegram linked' : 'telegram unlinked', { duration: 3000 });
+          playNotifSound();
           break;
         case 'heartbeat':
-          toast('heartbeat', { description: event.text.slice(0, 80), duration: 5000 });
           if (!windowFocused) {
+            toast('heartbeat', { description: event.text.slice(0, 80), duration: 5000 });
             new Notification('dorabot', { body: `heartbeat: ${event.text.slice(0, 80)}` });
+            playNotifSound();
           }
           break;
         case 'calendar':
           toast('calendar event', { description: event.summary, duration: 5000 });
           if (!windowFocused) {
             new Notification('dorabot', { body: `calendar: ${event.summary}` });
+            playNotifSound();
           }
           break;
       }
@@ -515,10 +522,17 @@ export default function App() {
   return (
     <TooltipProvider delayDuration={300}>
       <Toaster
-        position="top-right"
+        position="bottom-right"
+        gap={6}
         toastOptions={{
-          className: 'font-mono text-xs',
-          style: { background: 'var(--card)', border: '1px solid var(--border)', color: 'var(--foreground)' },
+          className: 'font-mono text-xs !rounded-lg !shadow-lg',
+          style: {
+            background: 'var(--popover)',
+            border: '1px solid var(--border)',
+            color: 'var(--foreground)',
+            backdropFilter: 'blur(12px)',
+            padding: '10px 14px',
+          },
         }}
       />
 
