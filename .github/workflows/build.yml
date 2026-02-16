@@ -14,6 +14,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -41,13 +43,18 @@ jobs:
           npx electron-builder --mac --arm64 --publish always
         working-directory: desktop
 
-      - name: Publish release
+      - name: Publish release with notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          # electron-builder creates a draft release; publish it
-          gh release edit "$TAG" --draft=false --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          PREV_TAG=$(git tag --sort=-v:refname | sed -n '2p')
+          if [ -n "$PREV_TAG" ]; then
+            NOTES=$(git log "$PREV_TAG".."$TAG" --oneline --no-merges)
+          else
+            NOTES=$(git log --oneline --no-merges -20)
+          fi
+          gh release edit "$TAG" --draft=false --notes "$NOTES" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
 
       - name: Upload DMG
         uses: actions/upload-artifact@v4

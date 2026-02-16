@@ -26,9 +26,39 @@ export function VirtualChatList<T>({
   const viewportRef = useRef<HTMLDivElement>(null);
   const heightsRef = useRef<Map<number, number>>(new Map());
   const nearBottomRef = useRef(true);
+  const observerRef = useRef<ResizeObserver | null>(null);
+  const observedRef = useRef<Map<number, HTMLDivElement>>(new Map());
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const [measureVersion, setMeasureVersion] = useState(0);
+
+  const updateHeight = useCallback((index: number, element: HTMLDivElement) => {
+    const height = Math.ceil(element.getBoundingClientRect().height);
+    const prev = heightsRef.current.get(index);
+    if (prev === height) return;
+    heightsRef.current.set(index, Math.max(20, height));
+    setMeasureVersion(v => v + 1);
+  }, []);
+
+  // Single ResizeObserver for all row elements
+  useEffect(() => {
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const el = entry.target as HTMLDivElement;
+        const idx = Number(el.dataset.virtualIndex);
+        if (!isNaN(idx)) {
+          const height = Math.ceil(entry.borderBoxSize?.[0]?.blockSize ?? el.getBoundingClientRect().height);
+          const prev = heightsRef.current.get(idx);
+          if (prev !== height && height > 0) {
+            heightsRef.current.set(idx, Math.max(20, height));
+            setMeasureVersion(v => v + 1);
+          }
+        }
+      }
+    });
+    observerRef.current = ro;
+    return () => ro.disconnect();
+  }, []);
 
   const layout = useMemo(() => {
     const heights: number[] = new Array(items.length);
@@ -93,14 +123,27 @@ export function VirtualChatList<T>({
     onScrollBehaviorConsumed?.();
   }, [items.length, layout.total, onScrollBehaviorConsumed, scrollBehavior]);
 
-  const measureRow = useCallback((index: number, element: HTMLDivElement | null) => {
-    if (!element) return;
-    const height = Math.ceil(element.getBoundingClientRect().height);
-    const prev = heightsRef.current.get(index);
-    if (prev === height) return;
-    heightsRef.current.set(index, Math.max(20, height));
-    setMeasureVersion(v => v + 1);
-  }, []);
+  const attachRow = useCallback((index: number, el: HTMLDivElement | null) => {
+    const ro = observerRef.current;
+    if (!ro) return;
+
+    // Unobserve old element for this index
+    const prev = observedRef.current.get(index);
+    if (prev && prev !== el) {
+      ro.unobserve(prev);
+      observedRef.current.delete(index);
+    }
+
+    if (!el) return;
+
+    // Tag element with index for the ResizeObserver callback
+    el.dataset.virtualIndex = String(index);
+    observedRef.current.set(index, el);
+    ro.observe(el);
+
+    // Initial measurement
+    updateHeight(index, el);
+  }, [updateHeight]);
 
   return (
     <div
@@ -114,7 +157,7 @@ export function VirtualChatList<T>({
           return (
             <div
               key={index}
-              ref={(el) => measureRow(index, el)}
+              ref={(el) => attachRow(index, el)}
               className={itemClassName}
               style={{
                 position: 'absolute',

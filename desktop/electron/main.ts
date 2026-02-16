@@ -8,6 +8,7 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 let gatewayManager: GatewayManager | null = null;
+let updateCheckInterval: ReturnType<typeof setInterval> | null = null;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
@@ -76,7 +77,7 @@ function setupAutoUpdater(): void {
   // Check for updates 10s after launch, then every 4 hours
   if (!is.dev) {
     setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 10_000);
-    setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 4 * 60 * 60 * 1000);
+    updateCheckInterval = setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 4 * 60 * 60 * 1000);
   }
 }
 
@@ -267,5 +268,6 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  if (updateCheckInterval) clearInterval(updateCheckInterval);
   gatewayManager?.stop();
 });

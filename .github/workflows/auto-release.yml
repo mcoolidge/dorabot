@@ -29,18 +29,6 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Generate release notes
-        if: steps.version.outputs.changed == 'true'
-        id: notes
-        uses: anthropics/claude-code-action@v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: |
-            Generate concise release notes for v${{ steps.version.outputs.version }}.
-            Run: git log v${{ steps.version.outputs.old }}..HEAD --oneline --no-merges
-            Summarize the changes into a markdown release note with sections like Features, Fixes, Improvements as needed.
-            1 line per change, no fluff. Write the output to release-notes.md.
-
       - name: Create tag
         if: steps.version.outputs.changed == 'true'
         env:
@@ -49,13 +37,3 @@ jobs:
           VERSION="v${{ steps.version.outputs.version }}"
           git tag "$VERSION"
           git push origin "$VERSION"
-          # Release is created by electron-builder in the Build & Notarize workflow
-          # which triggers on tag push. Storing release notes for that workflow.
-
-      - name: Upload release notes
-        if: steps.version.outputs.changed == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-notes
-          path: release-notes.md
-          retention-days: 1
