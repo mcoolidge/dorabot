@@ -898,6 +898,15 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         }
       },
       runItem: async (item, _cfg, ctx) => {
+        const connectedOwners = ctx.connectedChannels || [];
+        const preferredOwner = connectedOwners.find(c => c.channel === 'telegram')
+          || connectedOwners.find(c => c.channel === 'whatsapp')
+          || connectedOwners[0];
+
+        const useOwnerChannel = item.session !== 'isolated' && !!preferredOwner;
+        const runChannel = useOwnerChannel ? preferredOwner!.channel : undefined;
+        const runChatId = useOwnerChannel ? preferredOwner!.chatId : undefined;
+
         const session = sessionRegistry.getOrCreate({
           channel: 'calendar',
           chatId: item.id,
@@ -916,6 +925,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           prompt: item.message,
           sessionKey: session.key,
           source: `calendar/${item.id}`,
+          channel: runChannel,
+          messageMetadata: runChannel && runChatId ? {
+            channel: runChannel,
+            chatId: runChatId,
+            chatType: 'dm',
+            senderName: item.summary,
+            body: item.message,
+          } : undefined,
           extraContext: ctx.timezone ? `User timezone: ${ctx.timezone}` : undefined,
         });
         return result || { sessionId: '', result: '', messages: [], usage: { inputTokens: 0, outputTokens: 0, totalCostUsd: 0 }, durationMs: 0, usedMessageTool: false };
