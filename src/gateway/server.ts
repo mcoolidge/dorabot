@@ -1795,6 +1795,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         const connected = getAllChannelStatuses()
           .filter(s => s.connected && ownerChatIds.has(s.channel))
           .map(s => ({ channel: s.channel, chatId: ownerChatIds.get(s.channel)! }));
+        const pulseItem = scheduler?.listItems().find(i => i.id === AUTONOMOUS_SCHEDULE_ID);
+        const lastPulseAt = pulseItem?.lastRunAt ? new Date(pulseItem.lastRunAt).getTime() : undefined;
         const gen = streamAgent({
           prompt,
           sessionId: session?.sessionId,
@@ -1802,11 +1804,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           config,
           channel,
           connectedChannels: connected,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           extraContext,
           canUseTool: makeCanUseTool(channel, messageMetadata?.chatId, sessionKey),
           abortController,
           messageMetadata,
           onRunReady: (handle) => { runHandles.set(sessionKey, handle); },
+          lastPulseAt,
         });
 
         let agentText = '';

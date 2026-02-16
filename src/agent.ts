@@ -60,6 +60,7 @@ export type AgentOptions = {
   abortController?: AbortController;
   messageMetadata?: MessageMetadata;
   onRunReady?: (handle: RunHandle) => void;
+  lastPulseAt?: number;
 };
 
 export type AgentResult = {
@@ -90,6 +91,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     onToolResult,
     hooks: customHooks,
     messageMetadata,
+    lastPulseAt,
   } = opts;
 
   const startTime = Date.now();
@@ -121,6 +123,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     ownerIdentity,
     extraContext,
     workspaceFiles,
+    lastPulseAt,
   });
 
   // create MCP server for custom tools
@@ -263,6 +266,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     extraContext,
     hooks: customHooks,
     messageMetadata,
+    lastPulseAt,
   } = opts;
 
   const startTime = Date.now();
@@ -289,6 +293,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     ownerIdentity,
     extraContext,
     workspaceFiles,
+    lastPulseAt,
   });
 
   const mcpServer = createAgentMcpServer();

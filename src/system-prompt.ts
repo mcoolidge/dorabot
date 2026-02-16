@@ -14,6 +14,7 @@ export type SystemPromptOptions = {
   extraContext?: string;
   workspaceFiles?: WorkspaceFiles;
   isAutonomousRun?: boolean;
+  lastPulseAt?: number;
 };
 
 export function buildSystemPrompt(opts: SystemPromptOptions): string {
@@ -209,9 +210,17 @@ ${ownerIdentity}`);
   // date and time
   if (timezone) {
     const now = new Date();
-    sections.push(`## Current Date & Time
+    let timeSection = `## Current Date & Time
 
-${now.toLocaleString('en-US', { timeZone: timezone })} (${timezone})`);
+${now.toLocaleString('en-US', { timeZone: timezone })} (${timezone})`;
+
+    if (opts.lastPulseAt) {
+      const lastPulse = new Date(opts.lastPulseAt);
+      const elapsed = Math.floor((now.getTime() - opts.lastPulseAt) / 1000 / 60);
+      timeSection += `\nLast pulse: ${lastPulse.toLocaleString('en-US', { timeZone: timezone })} (${elapsed}m ago)`;
+    }
+
+    sections.push(timeSection);
   }
 
   // runtime
