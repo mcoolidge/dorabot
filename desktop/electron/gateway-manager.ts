@@ -2,8 +2,8 @@ import { utilityProcess, UtilityProcess, app } from 'electron';
 import { existsSync, readFileSync, mkdirSync, writeFileSync, openSync } from 'fs';
 import { execSync } from 'child_process';
 import { join } from 'path';
-import { homedir } from 'os';
 import { is } from '@electron-toolkit/utils';
+import { DORABOT_DIR, DORABOT_LOGS_DIR, GATEWAY_LOG_PATH, GATEWAY_TOKEN_PATH } from './dorabot-paths';
 
 // macOS Electron apps launched from Finder/Dock get a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin)
 // which doesn't include node, homebrew, nvm, etc. Resolve the real PATH from the user's shell.
@@ -51,15 +51,13 @@ export class GatewayManager {
 
   /** Ensure ~/.dorabot directory structure exists */
   private ensureDataDir(): void {
-    const dorabotDir = join(homedir(), '.dorabot');
-    const logsDir = join(dorabotDir, 'logs');
-    if (!existsSync(dorabotDir)) mkdirSync(dorabotDir, { recursive: true });
-    if (!existsSync(logsDir)) mkdirSync(logsDir, { recursive: true });
+    if (!existsSync(DORABOT_DIR)) mkdirSync(DORABOT_DIR, { recursive: true });
+    if (!existsSync(DORABOT_LOGS_DIR)) mkdirSync(DORABOT_LOGS_DIR, { recursive: true });
   }
 
   /** Wait for the gateway token file to appear (signals readiness) */
   private waitForReady(timeoutMs = 20000): Promise<void> {
-    const tokenPath = join(homedir(), '.dorabot', 'gateway-token');
+    const tokenPath = GATEWAY_TOKEN_PATH;
 
     return new Promise((resolve, reject) => {
       // If token already exists from a previous run, we're good
@@ -96,7 +94,7 @@ export class GatewayManager {
     }
 
     // Open log file for gateway stdout/stderr
-    const logPath = join(homedir(), '.dorabot', 'logs', 'gateway.log');
+    const logPath = GATEWAY_LOG_PATH;
 
     console.log(`[gateway-manager] Starting gateway from: ${entryPath}`);
 

@@ -1,17 +1,14 @@
 import Database from 'better-sqlite3';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { mkdirSync } from 'node:fs';
+import { DORABOT_DB_PATH, DORABOT_DIR } from './workspace.js';
 
 let db: Database.Database | null = null;
-
-const DB_PATH = join(homedir(), '.dorabot', 'dorabot.db');
 
 export function getDb(): Database.Database {
   if (db) return db;
 
-  mkdirSync(join(homedir(), '.dorabot'), { recursive: true });
-  db = new Database(DB_PATH);
+  mkdirSync(DORABOT_DIR, { recursive: true });
+  db = new Database(DORABOT_DB_PATH);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 

@@ -1,6 +1,4 @@
 import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import type { Config, SandboxSettings } from './config.js';
 import type { RunHandle } from './providers/types.js';
 import { getProvider } from './providers/index.js';
@@ -25,7 +23,7 @@ import { getEligibleSkills, matchSkillToPrompt, type Skill } from './skills/load
 import { createDefaultHooks, mergeHooks, type HookEvent, type HookCallbackMatcher } from './hooks/index.js';
 import { getAllAgents } from './agents/definitions.js';
 import { SessionManager, sdkMessageToSession, type SessionMessage, type MessageMetadata } from './session/manager.js';
-import { loadWorkspaceFiles, ensureWorkspace } from './workspace.js';
+import { loadWorkspaceFiles, ensureWorkspace, TMP_DIR } from './workspace.js';
 
 // clean env for SDK subprocess - strip vscode vars that cause file watcher crashes
 function cleanEnvForSdk(): Record<string, string> {
@@ -38,7 +36,7 @@ function cleanEnvForSdk(): Record<string, string> {
     env[key] = val;
   }
   // use a clean tmpdir so SDK file watcher doesn't hit socket files
-  const sdkTmp = join(homedir(), '.dorabot', 'tmp');
+  const sdkTmp = TMP_DIR;
   mkdirSync(sdkTmp, { recursive: true });
   env.TMPDIR = sdkTmp;
   return env;

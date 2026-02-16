@@ -1,11 +1,10 @@
 import { contextBridge, shell, ipcRenderer } from 'electron';
 import { readFileSync, existsSync } from 'fs';
-import { join } from 'path';
-import { homedir } from 'os';
+import { GATEWAY_TOKEN_PATH } from './dorabot-paths';
 
 // Read token once at preload time — not exposed as a re-callable function.
 // This prevents malicious scripts from repeatedly extracting the token.
-const tokenPath = join(homedir(), '.dorabot', 'gateway-token');
+const tokenPath = GATEWAY_TOKEN_PATH;
 const gatewayToken = existsSync(tokenPath)
   ? readFileSync(tokenPath, 'utf-8').trim()
   : null;
