@@ -555,6 +555,17 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   }
 
   function buildPulseReplyContext(msg: InboundMessage): string | undefined {
+    const inlineSessionId =
+      msg.body.match(/\bpulse_session_id:\s*([A-Za-z0-9._:-]+)/i)?.[1]
+      || msg.replyToBody?.match(/\bpulse_session_id:\s*([A-Za-z0-9._:-]+)/i)?.[1];
+    if (inlineSessionId) {
+      return [
+        'User referenced a prior autonomy pulse.',
+        `Pulse session_id: ${inlineSessionId}`,
+        'Use memory_read with this session_id to recover full pulse context before responding.',
+      ].join('\n');
+    }
+
     if (!msg.replyToId) return undefined;
     const ref = pulseReplyRefs.get(pulseRefKey(msg.channel, msg.chatId, msg.replyToId));
     if (!ref) return undefined;
@@ -673,7 +684,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   }
 
   // process a channel message (or batched messages) through the agent
-  async function processChannelMessage(msg: InboundMessage, batchedBodies?: string[]) {
+  async function processChannelMessage(msg: InboundMessage, batchedBodies?: string[], pulseReplyContext?: string) {
     ownerChatIds.set(msg.channel, msg.chatId);
     persistOwnerChatIds();
 
@@ -750,11 +761,19 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     // build media attribute if present
     const mediaAttr = msg.mediaType ? ` media_type="${msg.mediaType}" media_path="${msg.mediaPath || ''}"` : '';
 
+    const replyContext = pulseReplyContext || buildPulseReplyContext(msg);
+
     const channelPrompt = [
       `<incoming_message channel="${msg.channel}" sender="${safeSender}" chat="${msg.chatId}"${mediaAttr}>`,
       safeBody || (msg.mediaPath ? `[Attached: ${msg.mediaType || 'file'} at ${msg.mediaPath}]` : ''),
       `</incoming_message>`,
       '',
+      ...(replyContext ? [
+        '<pulse_reply_context>',
+        replyContext.replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+        '</pulse_reply_context>',
+        '',
+      ] : []),
     ].join('\n');
 
     // handleAgentRun may never return for persistent sessions (Claude async generator).
@@ -765,6 +784,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       sessionKey: session.key,
       source: `${msg.channel}/${msg.chatId}`,
       channel: msg.channel,
+      extraContext: replyContext,
       messageMetadata: {
         channel: msg.channel,
         chatId: msg.chatId,
@@ -801,6 +821,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     config,
     onMessage: async (msg: InboundMessage) => {
       broadcast({ event: 'channel.message', data: msg });
+      const pulseReplyContext = buildPulseReplyContext(msg);
 
       if (msg.channel === 'desktop') {
         // desktop handled via chat.send RPC, not here
@@ -840,6 +861,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           `<incoming_message channel="${msg.channel}" sender="${safeSender}" chat="${msg.chatId}"${mediaAttr}>`,
           safeBody || (msg.mediaPath ? `[Attached: ${msg.mediaType || 'file'} at ${msg.mediaPath}]` : ''),
           `</incoming_message>`,
+          ...(pulseReplyContext ? [
+            '',
+            '<pulse_reply_context>',
+            pulseReplyContext.replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+            '</pulse_reply_context>',
+          ] : []),
         ].join('\n');
         console.log(`[onMessage] INJECTING into ${session.key}`);
         handle.inject(channelPrompt);
@@ -883,7 +910,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       }
 
       console.log(`[onMessage] falling through to processChannelMessage for ${session.key}`);
-      await processChannelMessage(msg);
+      await processChannelMessage(msg, undefined, pulseReplyContext);
     },
     onCommand: async (channel, cmd, chatId) => {
       const chatType = 'dm';
@@ -983,15 +1010,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         const useOwnerChannel = item.session !== 'isolated' && !!preferredOwner;
         const runChannel = useOwnerChannel ? preferredOwner!.channel : undefined;
         const runChatId = useOwnerChannel ? preferredOwner!.chatId : undefined;
+        const runSessionChatId = `${item.id}-${Date.now().toString(36)}`;
 
         const session = sessionRegistry.getOrCreate({
           channel: 'calendar',
-          chatId: item.id,
+          chatId: runSessionChatId,
           chatType: 'dm',
         });
         fileSessionManager.setMetadata(session.sessionId, {
           channel: 'calendar',
-          chatId: item.id,
+          chatId: runSessionChatId,
           chatType: 'dm',
           senderName: item.summary,
         });
@@ -1212,8 +1240,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       };
     }
 
-    // check tool allow/deny policy (channel-specific + global)
     const cleanName = cleanToolName(toolName);
+    if (cleanName === 'message' && runSessionKey) {
+      const runSource = activeRunSources.get(runSessionKey);
+      const targetChannel = typeof input.channel === 'string' ? input.channel : runChannel;
+      if (runSource === `calendar/${AUTONOMOUS_SCHEDULE_ID}` && targetChannel === 'telegram' && typeof input.message === 'string') {
+        input.message = appendPulseSessionMarker(input.message, runSource, runSessionKey, targetChannel);
+      }
+    }
+
+    // check tool allow/deny policy (channel-specific + global)
     const channelToolPolicy = getChannelToolPolicy(runChannel);
     const globalToolPolicy = config.security?.tools;
     if (!isToolAllowed(cleanName, channelToolPolicy, globalToolPolicy)) {
@@ -1289,6 +1325,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
   // track which channel each active run belongs to (for tool policy lookups)
   const activeRunChannels = new Map<string, string>();
+  const activeRunSources = new Map<string, string>();
 
   // agent run queue (one per session key)
   const runQueues = new Map<string, Promise<void>>();
@@ -1327,6 +1364,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       console.log(`[handleAgentRun] prev resolved, starting run for ${sessionKey}`);
       sessionRegistry.setActiveRun(sessionKey, true);
       if (channel) activeRunChannels.set(sessionKey, channel);
+      activeRunSources.set(sessionKey, source);
       // init snapshot
       sessionSnapshots.set(sessionKey, {
         sessionKey, status: 'thinking', text: '',
@@ -1371,6 +1409,18 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
         // track Task tool_use IDs so we can recognize their tool_results
         const taskToolUseIds = new Set<string>();
+        const toolUseMeta = new Map<string, { name: string; input: Record<string, unknown> }>();
+
+        const maybeRegisterPulseRefFromToolResult = (toolUseId: string, toolResultText: string) => {
+          const meta = toolUseMeta.get(toolUseId);
+          if (!meta || meta.name !== 'message') return;
+          const sentId = toolResultText.match(/Message sent\. ID:\s*([^\s]+)/)?.[1];
+          const targetChannel = typeof meta.input.channel === 'string' ? meta.input.channel : channel;
+          const targetChatId = typeof meta.input.target === 'string' ? meta.input.target : undefined;
+          const outboundText = typeof meta.input.message === 'string' ? meta.input.message : '';
+          if (!sentId || !targetChannel || !targetChatId) return;
+          registerPulseReplyRef(source, sessionKey, targetChannel, targetChatId, sentId, outboundText);
+        };
 
         for await (const msg of gen) {
           const m = msg as Record<string, unknown>;
@@ -1553,6 +1603,20 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               for (const block of content) {
                 const b = block as Record<string, unknown>;
                 if (b.type === 'text' && !isSubagentMsg) agentText = b.text as string;
+                if (b.type === 'tool_use' && typeof b.id === 'string') {
+                  let parsedInput: Record<string, unknown> = {};
+                  if (typeof b.input === 'string') {
+                    try {
+                      const parsed = JSON.parse(b.input);
+                      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                        parsedInput = parsed as Record<string, unknown>;
+                      }
+                    } catch {}
+                  } else if (b.input && typeof b.input === 'object' && !Array.isArray(b.input)) {
+                    parsedInput = b.input as Record<string, unknown>;
+                  }
+                  toolUseMeta.set(b.id, { name: cleanToolName(String(b.name || '')), input: parsedInput });
+                }
                 // broadcast tool_use for non-streaming providers and subagent messages
                 if ((!hadStreamEvents || isSubagentMsg) && b.type === 'tool_use') {
                   const toolName = cleanToolName(b.name as string);
@@ -1611,6 +1675,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                       if (data) imageData = `data:${mime};base64,${data}`;
                     }
                   }
+                  maybeRegisterPulseRefFromToolResult(String(block.tool_use_id || ''), resultText);
                   broadcast({
                     event: 'agent.tool_result',
                     data: {
@@ -1644,6 +1709,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             const resultContent = Array.isArray(m.content)
               ? (m.content as Array<Record<string, unknown>>).filter(c => c.type === 'text').map(c => c.text).join('\n')
               : String(m.content || '');
+            maybeRegisterPulseRefFromToolResult(toolUseId, resultContent);
             broadcast({
               event: 'agent.tool_result',
               data: {
@@ -1709,7 +1775,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               }
               statusMessages.delete(sessionKey);
               if (h && !usedMessageTool && agentText) {
-                try { await h.send(ctx.chatId, agentText); } catch {}
+                try {
+                  const outboundText = appendPulseSessionMarker(agentText, source, sessionKey, ctx.channel);
+                  const sent = await h.send(ctx.chatId, outboundText);
+                  registerPulseReplyRef(source, sessionKey, ctx.channel, ctx.chatId, sent.id, outboundText);
+                } catch {}
               }
             }
 
@@ -1774,6 +1844,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       } finally {
         activeAbortControllers.delete(sessionKey);
         activeRunChannels.delete(sessionKey);
+        activeRunSources.delete(sessionKey);
         runHandles.delete(sessionKey);
         // clean up any remaining channel context (typing indicator, status message)
         const ctx = channelRunContexts.get(sessionKey);
