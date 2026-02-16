@@ -2,7 +2,7 @@
   "name": "dorabot",
   "version": "1.0.0",
   "type": "module",
-  "description": "OpenClaw-style agent built with Claude Agent SDK",
+  "description": "Open-source personal AI agent. Persistent memory, multi-channel messaging, browser automation, and proactive goal management.",
   "main": "dist/index.js",
   "bin": {
     "dorabot": "dist/index.js"

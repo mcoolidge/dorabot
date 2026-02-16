@@ -1356,6 +1356,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const pendingQuestions = new Map<string, {
     resolve: (answers: Record<string, string>) => void;
     reject: (err: Error) => void;
+    sessionKey?: string;
   }>();
 
   // pending AskUserQuestion requests waiting for channel responses (telegram inline keyboard / whatsapp text reply)
@@ -1504,7 +1505,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       }
 
       const answers = await new Promise<Record<string, string>>((resolveQ, rejectQ) => {
-        pendingQuestions.set(requestId, { resolve: resolveQ, reject: rejectQ });
+        pendingQuestions.set(requestId, { resolve: resolveQ, reject: rejectQ, sessionKey: runSessionKey });
         setTimeout(() => {
           if (pendingQuestions.has(requestId)) {
             pendingQuestions.delete(requestId);
@@ -2190,11 +2191,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const keys = params?.sessionKeys as string[];
           if (!Array.isArray(keys)) return { id, error: 'sessionKeys required' };
           const lastSeq = typeof params?.lastSeq === 'number' ? params.lastSeq : 0;
+          const lastSeqBySession = (params?.lastSeqBySession || {}) as Record<string, number>;
           const state = clientWs ? clients.get(clientWs) : undefined;
           if (state) keys.forEach(k => state.subscriptions.add(k));
           // replay persisted events for exact continuity before snapshot/live stream
           if (clientWs) {
-            const events = queryEvents(keys, lastSeq);
+            const events = keys.flatMap((sk) => {
+              const perSessionSeq = Number(lastSeqBySession?.[sk]);
+              const afterSeq = Number.isFinite(perSessionSeq) ? perSessionSeq : lastSeq;
+              return queryEvents([sk], afterSeq);
+            }).sort((a, b) => a.seq - b.seq);
             for (const row of events) {
               clientWs.send(JSON.stringify({ event: row.event_type, data: JSON.parse(row.data), seq: row.seq }));
             }
@@ -2329,6 +2335,17 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const pending = pendingQuestions.get(requestId);
           if (!pending) return { id, error: 'no pending question with that ID' };
           pendingQuestions.delete(requestId);
+          if (pending.sessionKey) {
+            const snap = sessionSnapshots.get(pending.sessionKey);
+            if (snap?.pendingQuestion?.requestId === requestId) {
+              snap.pendingQuestion = null;
+              snap.updatedAt = Date.now();
+            }
+            broadcast({
+              event: 'agent.question_dismissed',
+              data: { requestId, sessionKey: pending.sessionKey, reason: 'answered' },
+            });
+          }
           pending.resolve(answers);
           return { id, result: { answered: true } };
         }

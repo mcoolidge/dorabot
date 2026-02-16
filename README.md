@@ -5,43 +5,51 @@
 
   **Open-source personal AI agent.**
 
-  Your personal AI agent with persistent memory, multi-channel messaging (WhatsApp, Telegram, Slack), browser automation, email, Mac control, and a proactive goal system that proposes and ships work without being asked. Runs locally, bring your own model.
+  [![GitHub release](https://img.shields.io/github/v/release/suitedaces/dorabot)](https://github.com/suitedaces/dorabot/releases/latest)
+  [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+  [![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)](https://github.com/suitedaces/dorabot/releases/latest)
+
+  Personal AI agent with persistent memory, multi-channel messaging (WhatsApp, Telegram, Slack), browser automation, email, Mac control, and a proactive goal system that proposes and ships work without being asked. Runs locally, bring your own model.
+
+  [Download for macOS](https://github.com/suitedaces/dorabot/releases/latest) · [Website](https://dorabot.dev)
 
 </div>
 
 <img width="4336" height="2644" alt="Desktop app" src="https://github.com/user-attachments/assets/8ebfb9cf-0e41-45b9-9fed-26b5a9d14d5c" />
 
-> **Goals board** — The desktop app's Kanban view where the agent proposes goals autonomously and you drag them through Proposed → Approved → In Progress → Done. The right panel shows the project file tree and each card is tagged with priority, owner, and the feature branch it shipped on.
+> **Goals board** - The desktop app's Kanban view where the agent proposes goals autonomously and you drag them through Proposed -> Approved -> In Progress -> Done. Each card is tagged with priority and progress.
 
 <img alt="Goals Kanban board" src="public/desktop-goals.jpeg" width="800" />
 
-> **Telegram channel** — A real conversation on Telegram where dorabot reports back after completing three feature branches (Slack integration, MiniMax provider, Skills gallery). It summarizes what shipped, what needs attention, and follows up by pushing branches when asked — all without leaving the chat.
+> **Telegram channel** - A real conversation on Telegram where dorabot reports back after completing feature branches. It summarizes what shipped, what needs attention, and follows up by pushing branches when asked, all without leaving the chat.
 
 <img alt="Telegram chat" src="public/image.png" width="400" />
 
 ## What It Does
 
-- **Chat anywhere** - WhatsApp, Telegram, or the desktop app. Persistent memory across all channels.
+- **Chat anywhere** - WhatsApp, Telegram, Slack, or the desktop app. Persistent memory across all channels.
 - **Proactive goal management** - The agent proposes goals on its own, you approve via drag-and-drop Kanban board. It tracks progress, reports results, and picks up new work autonomously.
-- **Browse the web** - Fill forms, click buttons, read pages, stay logged in across sessions.
+- **Browse the web** - Fill forms, click buttons, read pages, stay logged in across sessions. 90+ browser actions via Playwright.
 - **Read and send email** - via Himalaya CLI (IMAP/SMTP, no OAuth needed).
 - **Control your Mac** - Windows, apps, Spotify, Calendar, Finder, system settings via AppleScript.
-- **Schedule anything** - One-shot reminders, recurring tasks, full cron expressions with timezone support.
+- **Schedule anything** - One-shot reminders, recurring tasks, iCal-based scheduling with timezone support.
 - **Work with GitHub** - PRs, issues, CI checks, code review via `gh` CLI.
 - **Generate images** - Text-to-image and image editing via Gemini API.
+- **Research and remember** - Full-text search across past conversations, daily journals, research notes. The agent builds context over time.
+- **Connect anything** - 7,300+ MCP servers via [Smithery](https://smithery.ai) registry. Add tools for databases, APIs, SaaS products.
 - **Extend with skills** - 9 built-in skills, 56k+ community skills from the [skills.sh](https://skills.sh) gallery, or ask the agent to create new ones on the fly.
 
 https://github.com/user-attachments/assets/d675347a-46c0-4767-b35a-e7a1db6386f9
 
 ## Quick Start
 
-### Prerequisites
+### Download (recommended)
 
-- Node.js 22+
-- **Claude** (API key or Pro/Max subscription) or **OpenAI** (API key or ChatGPT login)
-- Chrome, Brave, or Edge (for browser features)
+Download the macOS app from [Releases](https://github.com/suitedaces/dorabot/releases/latest). Open the DMG, drag to Applications, done. The app auto-updates.
 
-### Install
+**Requirements:** macOS, Chrome/Brave/Edge (for browser features), and a Claude API key or Pro/Max subscription (or OpenAI API key).
+
+### Build from source
 
 ```bash
 git clone https://github.com/suitedaces/dorabot.git
@@ -50,8 +58,6 @@ npm install
 npm run build
 npm link
 ```
-
-### Run
 
 ```bash
 # development - gateway + desktop with HMR
@@ -69,10 +75,12 @@ An Electron app that connects to the gateway over WebSocket.
 
 - **Chat** - Full chat interface with tool streaming UI, model selection, and effort levels
 - **Goals** - Drag-and-drop Kanban board (Proposed, Approved, In Progress, Done)
-- **Channels** - Set up WhatsApp (QR code) and Telegram (bot token)
+- **Research** - View and manage research notes the agent collects over time
+- **Channels** - Set up WhatsApp (QR code), Telegram (bot token), and Slack
 - **Skills** - Browse built-in and community skills, create and edit your own
+- **Connectors** - Add MCP servers from Smithery registry or configure manually
 - **Soul** - Edit personality (SOUL.md), profile (USER.md), and memory (MEMORY.md)
-- **Automations** - Manage cron jobs, reminders, and recurring tasks
+- **Automations** - Manage scheduled tasks, reminders, and recurring runs with pulse intervals
 - **Settings** - Provider setup, approval modes, sandbox config, tool policies
 
 ## Multi-Provider Support
@@ -133,6 +141,21 @@ Built-in skills:
 - **Gallery** - Browse and install from 56k+ community skills on [skills.sh](https://skills.sh) via the desktop app
 - **Agent-created** - Ask "make me a skill for deploying to Vercel" and the agent writes it and makes it available immediately
 
+## Connectors (MCP Servers)
+
+Add external tools via the [Model Context Protocol](https://modelcontextprotocol.io/). Browse 7,300+ servers from the [Smithery](https://smithery.ai) registry directly in the desktop app, or add your own with stdio/SSE/HTTP transport.
+
+```json
+{
+  "mcpServers": {
+    "postgres": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "postgresql://..."]
+    }
+  }
+}
+```
+
 ## Make It Yours
 
 Ask dorabot to onboard you, or edit the files directly:
@@ -142,7 +165,8 @@ Ask dorabot to onboard you, or edit the files directly:
 | `SOUL.md` | Personality and tone |
 | `USER.md` | Who you are, your preferences |
 | `MEMORY.md` | Persistent facts across sessions |
-| `AGENTS.md` | Extra instructions |
+
+All workspace files live in `~/.dorabot/workspace/` and are loaded into every session.
 
 ## Architecture
 
@@ -164,19 +188,21 @@ Ask dorabot to onboard you, or edit the files directly:
       │  (providers/)    │  Singleton + lazy init
       └────────┬────────┘
                │
-  ┌────────────┼────────────┐
-  │            │            │
-┌─▼─────┐ ┌───▼─────┐ ┌───▼───┐
-│ Tools │ │Sessions │ │ Cron  │
-│ (MCP) │ │(SQLite) │ │ Sched │
-└───────┘ └─────────┘ └───────┘
+  ┌────────┬───┼───┬──────────┐
+  │        │   │   │          │
+┌─▼─────┐┌▼───▼─┐┌▼───────┐┌─▼──────┐
+│ Tools ││ Sess ││Sched + ││ Memory │
+│ (MCP) ││(SQL) ││ Pulse  ││ (FTS5) │
+└───────┘└──────┘└────────┘└────────┘
 ```
 
-- **Gateway** - Central hub. ~70 RPC methods for config, sessions, channels, cron, skills, goals, provider management, and tool approval.
+- **Gateway** - Central hub. ~70 RPC methods for config, sessions, channels, scheduling, skills, goals, research, connectors, provider management, and tool approval.
 - **Providers** - Abstract interface. Claude uses Agent SDK (subprocess), Codex uses Codex SDK. Both support session resumption.
 - **Sessions** - SQLite-backed. Persistent across restarts. 4-hour idle timeout for new conversations.
-- **Tools** - Built-in via `claude_code` preset (Read, Write, Bash, etc.) plus custom MCP tools (messaging, browser, screenshot, goals, cron).
-- **Browser** - Playwright-based. 90+ actions. Persistent profile with authenticated sessions.
+- **Tools** - Built-in via `claude_code` preset (Read, Write, Bash, etc.) plus custom MCP tools (messaging, browser, screenshot, goals, scheduling) plus external MCP servers.
+- **Browser** - Playwright-based. 90+ actions. Persistent Chrome profile with authenticated sessions.
+- **Memory** - SQLite FTS5 index over all past conversations. Full-text search, daily journals, research notes.
+- **Scheduler** - iCal-based (RRULE). Scheduled runs route through the agent. Configurable pulse intervals for autonomous check-ins.
 
 ## Config
 
@@ -191,7 +217,7 @@ Ask dorabot to onboard you, or edit the files directly:
   "channels": {
     "whatsapp": { "enabled": false },
     "telegram": { "enabled": false, "token": "" }
-  },
+  }
 }
 ```
 
@@ -202,6 +228,7 @@ Ask dorabot to onboard you, or edit the files directly:
 - Token-authenticated gateway (256-bit hex)
 - Configurable tool approval tiers (auto-allow, notify, require-approval)
 - Channel-level security policies
+- macOS app sandbox for native permission management
 
 ## License
 

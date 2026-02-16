@@ -79,6 +79,7 @@ export default function App() {
   const [selectedChannel, setSelectedChannel] = useState<'whatsapp' | 'telegram'>('whatsapp');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const onboardingCheckedRef = useRef(false);
+  const onboardingCompletedRef = useRef(localStorage.getItem('dorabot:onboarding-completed') === 'true');
   const focusInputOnGroupSwitch = useRef(false);
   const notifCooldownRef = useRef<Record<string, number>>({});
   const gw = useGateway();
@@ -166,11 +167,14 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Check provider auth on connect - show onboarding if not authenticated
+  // Check provider auth on connect - show onboarding if not completed yet
   useEffect(() => {
     if (gw.connectionState === 'connected' && gw.providerInfo && !onboardingCheckedRef.current) {
       onboardingCheckedRef.current = true;
-      if (!gw.providerInfo.auth.authenticated) {
+      // Show onboarding if never completed, or if not authenticated (re-show auth flow)
+      if (!onboardingCompletedRef.current) {
+        setShowOnboarding(true);
+      } else if (!gw.providerInfo.auth.authenticated) {
         setShowOnboarding(true);
       }
     }
@@ -629,7 +633,16 @@ export default function App() {
       {showOnboarding && (
         <OnboardingOverlay
           gateway={gw}
-          onComplete={() => setShowOnboarding(false)}
+          onComplete={(launchOnboard) => {
+            setShowOnboarding(false);
+            localStorage.setItem('dorabot:onboarding-completed', 'true');
+            onboardingCompletedRef.current = true;
+            if (launchOnboard) {
+              // Launch the onboard skill in a new chat session
+              const created = tabState.newChatTab();
+              setTimeout(() => gw.sendMessage('onboard', created.sessionKey, created.chatId), 200);
+            }
+          }}
         />
       )}
 

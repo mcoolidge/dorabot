@@ -400,9 +400,17 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
 let cachedToken: string | null = null;
 function getToken(): string {
   if (!cachedToken) {
-    cachedToken = (window as any).electronAPI?.consumeGatewayToken?.()
-      || localStorage.getItem('dorabot:gateway-token')
-      || '';
+    const consumed = (window as any).electronAPI?.consumeGatewayToken?.() || '';
+    if (consumed) {
+      cachedToken = consumed;
+      try {
+        localStorage.setItem('dorabot:gateway-token', consumed);
+      } catch {
+        // ignore storage errors
+      }
+    } else {
+      cachedToken = localStorage.getItem('dorabot:gateway-token') || '';
+    }
   }
   return cachedToken ?? '';
 }
@@ -459,9 +467,37 @@ export function useGateway(url = 'wss://localhost:18789') {
   const currentChatIdRef = useRef<string>(`task-${Date.now()}`);
   const trackedSessionsRef = useRef<Set<string>>(new Set());
   const lastSeqRef = useRef<number>(0);
+  const lastSeqBySessionRef = useRef<Map<string, number>>(new Map());
+  const seenSeqsRef = useRef<Set<number>>(new Set());
+  const seenSeqOrderRef = useRef<number[]>([]);
+  const MAX_TRACKED_SEQS = 100000;
   // Callback ref for tab system to be notified of sessionId changes
   const onSessionIdChangeRef = useRef<((sessionKey: string, sessionId: string) => void) | null>(null);
   const onNotifiableEventRef = useRef<((event: NotifiableEvent) => void) | null>(null);
+
+  const markSeqIfNew = useCallback((seq: number, sessionKey?: string): boolean => {
+    if (seenSeqsRef.current.has(seq)) return false;
+    seenSeqsRef.current.add(seq);
+    seenSeqOrderRef.current.push(seq);
+    if (seq > lastSeqRef.current) lastSeqRef.current = seq;
+    if (sessionKey) {
+      const prev = lastSeqBySessionRef.current.get(sessionKey) || 0;
+      if (seq > prev) lastSeqBySessionRef.current.set(sessionKey, seq);
+    }
+    if (seenSeqOrderRef.current.length > MAX_TRACKED_SEQS) {
+      const oldest = seenSeqOrderRef.current.shift();
+      if (oldest !== undefined) seenSeqsRef.current.delete(oldest);
+    }
+    return true;
+  }, []);
+
+  const buildLastSeqBySession = useCallback((sessionKeys: string[]): Record<string, number> => {
+    const map: Record<string, number> = {};
+    for (const sk of sessionKeys) {
+      map[sk] = lastSeqBySessionRef.current.get(sk) || 0;
+    }
+    return map;
+  }, []);
 
   const rpc = useCallback(async (method: string, params?: Record<string, unknown>, timeoutMs = 30000): Promise<unknown> => {
     const ws = wsRef.current;
@@ -494,8 +530,12 @@ export function useGateway(url = 'wss://localhost:18789') {
       if (prev[sessionKey]) return prev;
       return { ...prev, [sessionKey]: { ...DEFAULT_SESSION_STATE } };
     });
-    rpc('sessions.subscribe', { sessionKeys: [sessionKey], lastSeq: lastSeqRef.current }).catch(() => {});
-  }, [rpc]);
+    rpc('sessions.subscribe', {
+      sessionKeys: [sessionKey],
+      lastSeq: lastSeqRef.current,
+      lastSeqBySession: buildLastSeqBySession([sessionKey]),
+    }).catch(() => {});
+  }, [buildLastSeqBySession, rpc]);
 
   const untrackSession = useCallback((sessionKey: string) => {
     trackedSessionsRef.current.delete(sessionKey);
@@ -516,10 +556,14 @@ export function useGateway(url = 'wss://localhost:18789') {
     if (pendingSubscribeRef.current) clearTimeout(pendingSubscribeRef.current);
     pendingSubscribeRef.current = setTimeout(() => {
       if (prevKey) rpc('sessions.unsubscribe', { sessionKeys: [prevKey] }).catch(() => {});
-      rpc('sessions.subscribe', { sessionKeys: [sessionKey], lastSeq: lastSeqRef.current }).catch(() => {});
+      rpc('sessions.subscribe', {
+        sessionKeys: [sessionKey],
+        lastSeq: lastSeqRef.current,
+        lastSeqBySession: buildLastSeqBySession([sessionKey]),
+      }).catch(() => {});
       pendingSubscribeRef.current = null;
     }, 100);
-  }, [rpc]);
+  }, [buildLastSeqBySession, rpc]);
 
   const setActiveSession = useCallback((sessionKey: string, chatId: string) => {
     activeSessionKeyRef.current = sessionKey;
@@ -538,6 +582,7 @@ export function useGateway(url = 'wss://localhost:18789') {
             ...(prev[sessionKey] || DEFAULT_SESSION_STATE),
             chatItems: items,
             sessionId,
+            pendingQuestion: null,
           },
         }));
         // restore registry entry so next chat.send continues this conversation
@@ -553,10 +598,10 @@ export function useGateway(url = 'wss://localhost:18789') {
   // --- Stream event batching (apply all queued deltas in one React update per frame) ---
   type QueuedStreamEvent = { sk: string; evt: Record<string, unknown>; parentId?: string | null };
   const streamQueueRef = useRef<QueuedStreamEvent[]>([]);
-  const streamRafRef = useRef<number | null>(null);
+  const streamFlushTimerRef = useRef<number | null>(null);
 
   const flushStreamQueue = useCallback(() => {
-    streamRafRef.current = null;
+    streamFlushTimerRef.current = null;
     const queue = streamQueueRef.current;
     if (!queue.length) return;
     streamQueueRef.current = [];
@@ -583,6 +628,14 @@ export function useGateway(url = 'wss://localhost:18789') {
       return next;
     });
   }, []);
+
+  const scheduleStreamFlush = useCallback(() => {
+    if (streamFlushTimerRef.current !== null) return;
+    streamFlushTimerRef.current = window.setTimeout(() => {
+      streamFlushTimerRef.current = null;
+      flushStreamQueue();
+    }, 16);
+  }, [flushStreamQueue]);
 
   // --- Event handling (routes to all tracked sessions) ---
 
@@ -636,11 +689,9 @@ export function useGateway(url = 'wss://localhost:18789') {
         const evt = d.event;
         if (!evt) break;
 
-        // batch stream events, flush once per animation frame
+        // batch stream events, flush shortly after arrival
         streamQueueRef.current.push({ sk, evt, parentId: d.parentToolUseId });
-        if (streamRafRef.current === null) {
-          streamRafRef.current = requestAnimationFrame(flushStreamQueue);
-        }
+        scheduleStreamFlush();
         break;
       }
 
@@ -649,9 +700,9 @@ export function useGateway(url = 'wss://localhost:18789') {
         const sk = d.sessionKey;
         if (!sk || !trackedSessionsRef.current.has(sk)) break;
         // flush any pending stream deltas before marking streaming:false
-        if (streamRafRef.current !== null) {
-          cancelAnimationFrame(streamRafRef.current);
-          streamRafRef.current = null;
+        if (streamFlushTimerRef.current !== null) {
+          clearTimeout(streamFlushTimerRef.current);
+          streamFlushTimerRef.current = null;
         }
         flushStreamQueue();
         setSessionStates(prev => {
@@ -930,19 +981,16 @@ export function useGateway(url = 'wss://localhost:18789') {
       case 'agent.stream_batch': {
         const events = data as any[];
         for (const evt of events) {
-          let skip = false;
+          let isDuplicate = false;
           if (evt && typeof evt === 'object') {
             const seq = (evt as { seq?: unknown }).seq;
+            const sk = (evt as { data?: { sessionKey?: string } }).data?.sessionKey;
             if (typeof seq === 'number') {
-              // drop replay/live overlap events we've already applied
-              if (seq <= lastSeqRef.current) {
-                skip = true;
-              } else {
-                lastSeqRef.current = seq;
-              }
+              // de-dup exact seqs, but allow out-of-order arrival
+              isDuplicate = !markSeqIfNew(seq, typeof sk === 'string' ? sk : undefined);
             }
           }
-          if (skip) continue;
+          if (isDuplicate) continue;
           if (evt && typeof evt === 'object' && 'event' in evt && 'data' in evt) {
             handleEvent(evt as GatewayEvent);
           } else {
@@ -1130,7 +1178,7 @@ export function useGateway(url = 'wss://localhost:18789') {
         break;
       }
     }
-  }, [flushStreamQueue]);
+  }, [flushStreamQueue, markSeqIfNew, scheduleStreamFlush]);
 
   const connect = useCallback(() => {
     // close any existing connection first
@@ -1158,7 +1206,11 @@ export function useGateway(url = 'wss://localhost:18789') {
             // re-subscribe all tracked sessions
             const tracked = Array.from(trackedSessionsRef.current);
             if (tracked.length > 0) {
-              rpc('sessions.subscribe', { sessionKeys: tracked, lastSeq: lastSeqRef.current }).catch(() => {});
+              rpc('sessions.subscribe', {
+                sessionKeys: tracked,
+                lastSeq: lastSeqRef.current,
+                lastSeqBySession: buildLastSeqBySession(tracked),
+              }).catch(() => {});
             }
             rpc('config.get').then((res) => {
               const c = res as Record<string, unknown>;
@@ -1213,11 +1265,9 @@ export function useGateway(url = 'wss://localhost:18789') {
         // event
         if ('event' in msg) {
           if (typeof msg.seq === 'number') {
-            // drop replay/live overlap events we've already applied
-            if (msg.seq <= lastSeqRef.current) {
-              return;
-            }
-            lastSeqRef.current = msg.seq;
+            // de-dup exact seqs, but allow out-of-order arrival
+            const sk = (msg as { data?: { sessionKey?: string } }).data?.sessionKey;
+            if (!markSeqIfNew(msg.seq, typeof sk === 'string' ? sk : undefined)) return;
           }
           handleEvent(msg as GatewayEvent);
         }
@@ -1249,7 +1299,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     ws.onerror = () => {
       ws.close();
     };
-  }, [url, rpc, handleEvent]);
+  }, [url, rpc, handleEvent, markSeqIfNew, buildLastSeqBySession]);
 
   useEffect(() => {
     connect();
@@ -1259,7 +1309,7 @@ export function useGateway(url = 'wss://localhost:18789') {
         pendingSubscribeRef.current = null;
       }
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      if (streamRafRef.current !== null) cancelAnimationFrame(streamRafRef.current);
+      if (streamFlushTimerRef.current !== null) clearTimeout(streamFlushTimerRef.current);
       if (wsRef.current) {
         wsRef.current.onclose = null;
         wsRef.current.close();
