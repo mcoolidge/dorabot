@@ -26,6 +26,7 @@ const TOOL_PENDING_TEXT: Record<string, string> = {
   screenshot: 'taking screenshot', browser: 'using browser',
   schedule: 'scheduling', list_schedule: 'listing schedule',
   update_schedule: 'updating schedule', cancel_schedule: 'cancelling schedule',
+  research_view: 'viewing research', research_add: 'adding research', research_update: 'updating research',
 };
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected';
@@ -184,6 +185,12 @@ export type CalendarRun = {
   messaged?: boolean;
   timestamp: number;
   seen?: boolean;
+};
+
+export type GoalExecution = {
+  sessionKey: string;
+  status: 'started' | 'completed' | 'error';
+  updatedAt: number;
 };
 
 export type SessionState = {
@@ -436,6 +443,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   const [telegramLinkError, setTelegramLinkError] = useState<string | null>(null);
   const [providerInfo, setProviderInfo] = useState<{ name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } } | null>(null);
   const [goalsVersion, setGoalsVersion] = useState(0);
+  const [goalExecutions, setGoalExecutions] = useState<Record<string, GoalExecution>>({});
   const [researchVersion, setResearchVersion] = useState(0);
   const [backgroundRuns, setBackgroundRuns] = useState<BackgroundRun[]>([]);
   const [calendarRuns, setCalendarRuns] = useState<CalendarRun[]>([]);
@@ -591,6 +599,11 @@ export function useGateway(url = 'wss://localhost:18789') {
           setSessionStates(prev => {
             const state = prev[sk];
             if (!state) return prev;
+            const last = state.chatItems[state.chatItems.length - 1];
+            const isMarkedRunSource = d.source.startsWith('goals/') || d.source.startsWith('calendar/');
+            if (isMarkedRunSource && last?.type === 'user' && last.content === d.prompt) {
+              return prev;
+            }
             return {
               ...prev,
               [sk]: {
@@ -917,12 +930,19 @@ export function useGateway(url = 'wss://localhost:18789') {
       case 'agent.stream_batch': {
         const events = data as any[];
         for (const evt of events) {
+          let skip = false;
           if (evt && typeof evt === 'object') {
             const seq = (evt as { seq?: unknown }).seq;
-            if (typeof seq === 'number' && seq > lastSeqRef.current) {
-              lastSeqRef.current = seq;
+            if (typeof seq === 'number') {
+              // drop replay/live overlap events we've already applied
+              if (seq <= lastSeqRef.current) {
+                skip = true;
+              } else {
+                lastSeqRef.current = seq;
+              }
             }
           }
+          if (skip) continue;
           if (evt && typeof evt === 'object' && 'event' in evt && 'data' in evt) {
             handleEvent(evt as GatewayEvent);
           } else {
@@ -1011,6 +1031,20 @@ export function useGateway(url = 'wss://localhost:18789') {
       case 'goals.update': {
         setGoalsVersion(v => v + 1);
         onNotifiableEventRef.current?.({ type: 'goals.update' });
+        break;
+      }
+
+      case 'goals.execution': {
+        const d = data as { goalId: string; sessionKey: string; status: 'started' | 'completed' | 'error'; timestamp: number };
+        if (!d.goalId) break;
+        setGoalExecutions(prev => ({
+          ...prev,
+          [d.goalId]: {
+            sessionKey: d.sessionKey,
+            status: d.status,
+            updatedAt: d.timestamp || Date.now(),
+          },
+        }));
         break;
       }
 
@@ -1178,7 +1212,11 @@ export function useGateway(url = 'wss://localhost:18789') {
 
         // event
         if ('event' in msg) {
-          if (typeof msg.seq === 'number' && msg.seq > lastSeqRef.current) {
+          if (typeof msg.seq === 'number') {
+            // drop replay/live overlap events we've already applied
+            if (msg.seq <= lastSeqRef.current) {
+              return;
+            }
             lastSeqRef.current = msg.seq;
           }
           handleEvent(msg as GatewayEvent);
@@ -1664,6 +1702,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     telegramUnlink,
     providerInfo,
     goalsVersion,
+    goalExecutions,
     researchVersion,
     backgroundRuns,
     calendarRuns,

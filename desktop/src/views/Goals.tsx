@@ -20,11 +20,21 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
 import { cn } from '@/lib/utils';
-import { Plus, X, Trash2, LayoutGrid, ChevronRight, Ban, User, Bot } from 'lucide-react';
+import { Plus, X, Trash2, LayoutGrid, ChevronRight, Ban, User, Bot, Play, Loader2, Pencil, Save } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -42,8 +52,26 @@ type GoalTask = {
   tags?: string[];
 };
 
+type GoalExecuteResponse = {
+  started: true;
+  goalId: string;
+  sessionKey: string;
+  sessionId: string;
+  chatId: string;
+};
+
+type DetailEditForm = {
+  title: string;
+  description: string;
+  status: GoalTask['status'];
+  priority: GoalTask['priority'];
+  tags: string;
+  result: string;
+};
+
 type Props = {
   gateway: ReturnType<typeof useGateway>;
+  onViewSession?: (sessionId: string, channel?: string, chatId?: string, chatType?: string) => void;
 };
 
 const COLUMNS: { id: GoalTask['status']; label: string; bg: string; hoverColor: string }[] = [
@@ -59,14 +87,41 @@ const PRIORITY_COLORS: Record<string, string> = {
   low: 'bg-muted text-muted-foreground',
 };
 
+function canStartExecution(status: GoalTask['status']): boolean {
+  return status === 'approved' || status === 'in_progress';
+}
+
+function toDetailForm(task: GoalTask): DetailEditForm {
+  return {
+    title: task.title,
+    description: task.description || '',
+    status: task.status,
+    priority: task.priority,
+    tags: task.tags?.join(', ') || '',
+    result: task.result || '',
+  };
+}
+
 // ── Droppable Column ──
 
-function KanbanColumn({ id, label, tasks, onDelete, onView, bg, hoverColor }: {
+function KanbanColumn({
+  id,
+  label,
+  tasks,
+  onDelete,
+  onView,
+  onStart,
+  isRunning,
+  bg,
+  hoverColor,
+}: {
   id: string;
   label: string;
   tasks: GoalTask[];
   onDelete: (id: string) => void;
   onView: (task: GoalTask) => void;
+  onStart: (task: GoalTask) => void;
+  isRunning: (id: string) => boolean;
   bg: string;
   hoverColor: string;
 }) {
@@ -92,7 +147,14 @@ function KanbanColumn({ id, label, tasks, onDelete, onView, bg, hoverColor }: {
             </div>
           )}
           {tasks.map(task => (
-            <KanbanCard key={task.id} task={task} onDelete={onDelete} onView={onView} />
+            <KanbanCard
+              key={task.id}
+              task={task}
+              onDelete={onDelete}
+              onView={onView}
+              onStart={onStart}
+              isRunning={isRunning(task.id)}
+            />
           ))}
         </div>
       </ScrollArea>
@@ -102,10 +164,19 @@ function KanbanColumn({ id, label, tasks, onDelete, onView, bg, hoverColor }: {
 
 // ── Draggable Card ──
 
-function KanbanCard({ task, onDelete, onView, overlay }: {
+function KanbanCard({
+  task,
+  onDelete,
+  onView,
+  onStart,
+  isRunning,
+  overlay,
+}: {
   task: GoalTask;
   onDelete: (id: string) => void;
   onView?: (task: GoalTask) => void;
+  onStart?: (task: GoalTask) => void;
+  isRunning?: boolean;
   overlay?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
@@ -113,16 +184,17 @@ function KanbanCard({ task, onDelete, onView, overlay }: {
     data: task,
   });
 
+  const canStart = canStartExecution(task.status);
+
   return (
     <div
       ref={overlay ? undefined : setNodeRef}
       {...(overlay ? {} : listeners)}
       {...(overlay ? {} : attributes)}
       onClick={e => {
-        // only open detail view if clicking the card body, not the trash button or its dialog
-        if (onView && !(e.target as HTMLElement).closest('[data-delete-trigger]')) {
-          onView(task);
-        }
+        if (!onView) return;
+        if ((e.target as HTMLElement).closest('[data-delete-trigger], [data-start-trigger]')) return;
+        onView(task);
       }}
       className={cn(
         'group rounded-md border border-border bg-card p-2 text-xs transition-shadow cursor-grab active:cursor-grabbing overflow-hidden',
@@ -148,6 +220,11 @@ function KanbanCard({ task, onDelete, onView, overlay }: {
             <Badge variant="outline" className="text-[8px] h-3.5 px-1">
               {task.source}
             </Badge>
+            {isRunning && (
+              <Badge variant="outline" className="text-[8px] h-3.5 px-1 gap-0.5 text-primary border-primary/40">
+                <Loader2 className="w-2.5 h-2.5 animate-spin" />running
+              </Badge>
+            )}
             {task.tags?.map(tag => (
               <Badge key={tag} variant="outline" className="text-[8px] h-3.5 px-1">
                 {tag}
@@ -155,27 +232,46 @@ function KanbanCard({ task, onDelete, onView, overlay }: {
             ))}
           </div>
         </div>
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <button
-              data-delete-trigger
-              className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
-              onPointerDown={e => e.stopPropagation()}
-            >
-              <Trash2 className="w-3 h-3" />
-            </button>
-          </AlertDialogTrigger>
-          <AlertDialogContent onClick={e => e.stopPropagation()}>
-            <AlertDialogHeader>
-              <AlertDialogTitle className="text-sm">delete "#{task.id} {task.title}"?</AlertDialogTitle>
-              <AlertDialogDescription className="text-xs">this cannot be undone.</AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel className="h-7 text-xs">cancel</AlertDialogCancel>
-              <AlertDialogAction className="h-7 text-xs" onClick={() => onDelete(task.id)}>delete</AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        {!overlay && (
+          <div className="flex items-start gap-1 shrink-0">
+            {canStart && onStart && (
+              <button
+                data-start-trigger
+                title="start execution"
+                className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-primary"
+                onPointerDown={e => e.stopPropagation()}
+                onClick={e => {
+                  e.stopPropagation();
+                  if (!isRunning) onStart(task);
+                }}
+                disabled={isRunning}
+              >
+                {isRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+              </button>
+            )}
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <button
+                  data-delete-trigger
+                  className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                  onPointerDown={e => e.stopPropagation()}
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </AlertDialogTrigger>
+              <AlertDialogContent onClick={e => e.stopPropagation()}>
+                <AlertDialogHeader>
+                  <AlertDialogTitle className="text-sm">delete "#{task.id} {task.title}"?</AlertDialogTitle>
+                  <AlertDialogDescription className="text-xs">this cannot be undone.</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel className="h-7 text-xs">cancel</AlertDialogCancel>
+                  <AlertDialogAction className="h-7 text-xs" onClick={() => onDelete(task.id)}>delete</AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -183,7 +279,7 @@ function KanbanCard({ task, onDelete, onView, overlay }: {
 
 // ── Main Goals View ──
 
-export function GoalsView({ gateway }: Props) {
+export function GoalsView({ gateway, onViewSession }: Props) {
   const [tasks, setTasks] = useState<GoalTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -191,6 +287,15 @@ export function GoalsView({ gateway }: Props) {
   const [activeTask, setActiveTask] = useState<GoalTask | null>(null);
   const [viewTask, setViewTask] = useState<GoalTask | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [detailEditing, setDetailEditing] = useState(false);
+  const [detailForm, setDetailForm] = useState<DetailEditForm>({
+    title: '',
+    description: '',
+    status: 'proposed',
+    priority: 'medium',
+    tags: '',
+    result: '',
+  });
   const [newTask, setNewTask] = useState({
     title: '',
     description: '',
@@ -201,6 +306,10 @@ export function GoalsView({ gateway }: Props) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
+
+  const isGoalRunning = useCallback((goalId: string) => {
+    return gateway.goalExecutions[goalId]?.status === 'started';
+  }, [gateway.goalExecutions]);
 
   const fireConfetti = useCallback(() => {
     confetti({
@@ -230,10 +339,24 @@ export function GoalsView({ gateway }: Props) {
     loadTasks();
   }, [loadTasks]);
 
-  // re-fetch when agent updates goals
   useEffect(() => {
     if (gateway.goalsVersion > 0) loadTasks();
   }, [gateway.goalsVersion, loadTasks]);
+
+  useEffect(() => {
+    if (!viewTask) return;
+    const latest = tasks.find(t => t.id === viewTask.id);
+    if (!latest) {
+      setViewTask(null);
+      setDetailOpen(false);
+      setDetailEditing(false);
+      return;
+    }
+    if (latest.updatedAt !== viewTask.updatedAt) {
+      setViewTask(latest);
+      if (!detailEditing) setDetailForm(toDetailForm(latest));
+    }
+  }, [tasks, viewTask, detailEditing]);
 
   const addTask = async () => {
     try {
@@ -261,6 +384,61 @@ export function GoalsView({ gateway }: Props) {
     }
   };
 
+  const startExecution = async (task: GoalTask) => {
+    if (!canStartExecution(task.status)) return;
+    if (isGoalRunning(task.id)) return;
+
+    setTasks(prev => prev.map(t => (
+      t.id === task.id && t.status === 'approved'
+        ? { ...t, status: 'in_progress', updatedAt: new Date().toISOString() }
+        : t
+    )));
+
+    try {
+      const result = await gateway.rpc('goals.execute', { id: task.id }) as GoalExecuteResponse;
+      const chatId = result?.chatId || `goal-${task.id}`;
+      if (onViewSession && result?.sessionId) {
+        onViewSession(result.sessionId, 'desktop', chatId, 'dm');
+      }
+      setTimeout(loadTasks, 100);
+    } catch (err) {
+      console.error('failed to start goal execution:', err);
+      loadTasks();
+    }
+  };
+
+  const saveDetailEdit = async () => {
+    if (!viewTask) return;
+    const title = detailForm.title.trim();
+    if (!title) return;
+
+    try {
+      const tags = detailForm.tags
+        .split(',')
+        .map(t => t.trim())
+        .filter(Boolean);
+
+      const updated = await gateway.rpc('goals.update', {
+        id: viewTask.id,
+        title,
+        description: detailForm.description,
+        status: detailForm.status,
+        priority: detailForm.priority,
+        result: detailForm.result,
+        tags,
+      }) as GoalTask;
+
+      if (updated && typeof updated === 'object') {
+        setViewTask(updated);
+        setDetailForm(toDetailForm(updated));
+      }
+      setDetailEditing(false);
+      setTimeout(loadTasks, 100);
+    } catch (err) {
+      console.error('failed to save goal edit:', err);
+    }
+  };
+
   const handleDragStart = (event: DragStartEvent) => {
     const task = tasks.find(t => t.id === event.active.id);
     setActiveTask(task || null);
@@ -276,9 +454,7 @@ export function GoalsView({ gateway }: Props) {
     const task = tasks.find(t => t.id === taskId);
     if (!task || task.status === newStatus) return;
 
-    // optimistic update
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: newStatus as GoalTask['status'] } : t));
-
     if (newStatus === 'approved') fireConfetti();
 
     try {
@@ -286,7 +462,7 @@ export function GoalsView({ gateway }: Props) {
       setTimeout(loadTasks, 100);
     } catch (err) {
       console.error('failed to move goal:', err);
-      loadTasks(); // revert
+      loadTasks();
     }
   };
 
@@ -315,7 +491,6 @@ export function GoalsView({ gateway }: Props) {
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      {/* header */}
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border shrink-0">
         <span className="font-semibold text-sm">Goals</span>
         <Badge variant="outline" className="text-[10px]">{tasks.filter(t => t.status !== 'rejected').length}</Badge>
@@ -329,7 +504,6 @@ export function GoalsView({ gateway }: Props) {
         </Button>
       </div>
 
-      {/* add form */}
       {showAddForm && (
         <div className="px-4 pt-3 shrink-0">
           <Card className="border-primary/50">
@@ -390,7 +564,6 @@ export function GoalsView({ gateway }: Props) {
         </div>
       )}
 
-      {/* kanban columns */}
       <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
         <div className="grid grid-cols-2 @xl:grid-cols-4 gap-3 p-4 flex-1 min-h-0 auto-rows-[1fr]">
           {COLUMNS.map(col => (
@@ -402,7 +575,14 @@ export function GoalsView({ gateway }: Props) {
               hoverColor={col.hoverColor}
               tasks={tasksByStatus(col.id)}
               onDelete={deleteTask}
-              onView={t => { setViewTask(t); setDetailOpen(true); }}
+              onStart={startExecution}
+              isRunning={isGoalRunning}
+              onView={t => {
+                setViewTask(t);
+                setDetailForm(toDetailForm(t));
+                setDetailEditing(false);
+                setDetailOpen(true);
+              }}
             />
           ))}
         </div>
@@ -411,7 +591,6 @@ export function GoalsView({ gateway }: Props) {
         </DragOverlay>
       </DndContext>
 
-      {/* rejected archive */}
       {rejectedTasks.length > 0 && (
         <div className="shrink-0 border-t border-border">
           <button
@@ -452,18 +631,26 @@ export function GoalsView({ gateway }: Props) {
         </div>
       )}
 
-      {/* task detail dialog */}
-      <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
+      <Dialog
+        open={detailOpen}
+        onOpenChange={open => {
+          setDetailOpen(open);
+          if (!open) {
+            setDetailEditing(false);
+            setViewTask(null);
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-lg max-h-[85vh] !grid-rows-[auto_1fr_auto] overflow-hidden">
           {viewTask && (
             <>
               <DialogHeader>
                 <DialogTitle className="text-sm flex items-center gap-2">
                   <span className="text-muted-foreground font-normal">#{viewTask.id}</span>
-                  {viewTask.title}
+                  {detailEditing ? detailForm.title || viewTask.title : viewTask.title}
                 </DialogTitle>
                 <DialogDescription asChild>
-                  <div className="flex items-center gap-1.5 pt-1">
+                  <div className="flex items-center gap-1.5 pt-1 flex-wrap">
                     <Badge variant="outline" className="text-[9px] h-4">{viewTask.status.replace('_', ' ')}</Badge>
                     {viewTask.priority !== 'medium' && (
                       <Badge className={cn('text-[8px] h-3.5 px-1', PRIORITY_COLORS[viewTask.priority])}>
@@ -474,6 +661,11 @@ export function GoalsView({ gateway }: Props) {
                       {viewTask.source === 'agent' ? <Bot className="w-2.5 h-2.5" /> : <User className="w-2.5 h-2.5" />}
                       {viewTask.source}
                     </Badge>
+                    {isGoalRunning(viewTask.id) && (
+                      <Badge variant="outline" className="text-[9px] h-4 gap-1 text-primary border-primary/40">
+                        <Loader2 className="w-2.5 h-2.5 animate-spin" />running
+                      </Badge>
+                    )}
                     {viewTask.tags?.map(tag => (
                       <Badge key={tag} variant="outline" className="text-[9px] h-4">{tag}</Badge>
                     ))}
@@ -482,47 +674,166 @@ export function GoalsView({ gateway }: Props) {
               </DialogHeader>
 
               <ScrollArea className="min-h-0">
-                <div className="space-y-3 pr-3">
-                  {viewTask.description && (
-                    <>
-                      <Separator />
-                      <div className="prose-chat text-xs">
-                        <Markdown remarkPlugins={[remarkGfm]}>{viewTask.description}</Markdown>
-                      </div>
-                    </>
-                  )}
-
-                  {viewTask.result && (
-                    <>
-                      <Separator />
-                      <div>
-                        <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">result</div>
+                {!detailEditing ? (
+                  <div className="space-y-3 pr-3">
+                    {viewTask.description && (
+                      <>
+                        <Separator />
                         <div className="prose-chat text-xs">
-                          <Markdown remarkPlugins={[remarkGfm]}>{viewTask.result}</Markdown>
+                          <Markdown remarkPlugins={[remarkGfm]}>{viewTask.description}</Markdown>
                         </div>
-                      </div>
-                    </>
-                  )}
+                      </>
+                    )}
 
-                  <Separator />
-                  <div className="grid grid-cols-1 @xs:grid-cols-2 gap-2 text-[10px] text-muted-foreground">
-                    <div>created: {new Date(viewTask.createdAt).toLocaleString()}</div>
-                    <div>updated: {new Date(viewTask.updatedAt).toLocaleString()}</div>
-                    {viewTask.completedAt && <div className="col-span-2">completed: {new Date(viewTask.completedAt).toLocaleString()}</div>}
+                    {viewTask.result && (
+                      <>
+                        <Separator />
+                        <div>
+                          <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">result</div>
+                          <div className="prose-chat text-xs">
+                            <Markdown remarkPlugins={[remarkGfm]}>{viewTask.result}</Markdown>
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    <Separator />
+                    <div className="grid grid-cols-1 @xs:grid-cols-2 gap-2 text-[10px] text-muted-foreground">
+                      <div>created: {new Date(viewTask.createdAt).toLocaleString()}</div>
+                      <div>updated: {new Date(viewTask.updatedAt).toLocaleString()}</div>
+                      {viewTask.completedAt && <div className="col-span-2">completed: {new Date(viewTask.completedAt).toLocaleString()}</div>}
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="space-y-3 pr-3">
+                    <div className="space-y-1">
+                      <Label className="text-[11px]">title</Label>
+                      <Input
+                        value={detailForm.title}
+                        onChange={e => setDetailForm(prev => ({ ...prev, title: e.target.value }))}
+                        className="h-8 text-xs"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[11px]">description</Label>
+                      <Textarea
+                        rows={4}
+                        value={detailForm.description}
+                        onChange={e => setDetailForm(prev => ({ ...prev, description: e.target.value }))}
+                        className="text-xs"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[11px]">result</Label>
+                      <Textarea
+                        rows={3}
+                        value={detailForm.result}
+                        onChange={e => setDetailForm(prev => ({ ...prev, result: e.target.value }))}
+                        className="text-xs"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[11px]">status</Label>
+                      <div className="flex gap-1 flex-wrap">
+                        {(['proposed', 'approved', 'in_progress', 'done', 'rejected'] as const).map(status => (
+                          <Button
+                            key={status}
+                            variant={detailForm.status === status ? 'default' : 'outline'}
+                            size="sm"
+                            className="h-6 text-[11px] px-2"
+                            onClick={() => setDetailForm(prev => ({ ...prev, status }))}
+                          >
+                            {status.replace('_', ' ')}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[11px]">priority</Label>
+                      <div className="flex gap-1">
+                        {(['high', 'medium', 'low'] as const).map(priority => (
+                          <Button
+                            key={priority}
+                            variant={detailForm.priority === priority ? 'default' : 'outline'}
+                            size="sm"
+                            className="h-6 text-[11px] px-2"
+                            onClick={() => setDetailForm(prev => ({ ...prev, priority }))}
+                          >
+                            {priority}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <Label className="text-[11px]">tags</Label>
+                      <Input
+                        value={detailForm.tags}
+                        onChange={e => setDetailForm(prev => ({ ...prev, tags: e.target.value }))}
+                        placeholder="comma separated"
+                        className="h-8 text-xs"
+                      />
+                    </div>
+                  </div>
+                )}
               </ScrollArea>
 
-              <div className="flex justify-end gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-xs text-destructive hover:text-destructive"
-                  onClick={() => { deleteTask(viewTask.id); setDetailOpen(false); }}
-                >
-                  <Trash2 className="w-3 h-3 mr-1" />delete
-                </Button>
-                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setDetailOpen(false)}>close</Button>
+              <div className="flex justify-between gap-2">
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => startExecution(viewTask)}
+                    disabled={!canStartExecution(viewTask.status) || isGoalRunning(viewTask.id)}
+                  >
+                    {isGoalRunning(viewTask.id)
+                      ? <><Loader2 className="w-3 h-3 mr-1 animate-spin" />running</>
+                      : <><Play className="w-3 h-3 mr-1" />start execution</>}
+                  </Button>
+                  {!detailEditing ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={() => {
+                        setDetailForm(toDetailForm(viewTask));
+                        setDetailEditing(true);
+                      }}
+                    >
+                      <Pencil className="w-3 h-3 mr-1" />edit
+                    </Button>
+                  ) : (
+                    <>
+                      <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setDetailEditing(false)}>
+                        cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={saveDetailEdit}
+                        disabled={!detailForm.title.trim()}
+                      >
+                        <Save className="w-3 h-3 mr-1" />save
+                      </Button>
+                    </>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs text-destructive hover:text-destructive"
+                    onClick={() => { deleteTask(viewTask.id); setDetailOpen(false); }}
+                  >
+                    <Trash2 className="w-3 h-3 mr-1" />delete
+                  </Button>
+                  <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setDetailOpen(false)}>close</Button>
+                </div>
               </div>
             </>
           )}

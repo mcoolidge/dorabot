@@ -1,4 +1,3 @@
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import makeWASocket, {
@@ -8,6 +7,7 @@ import makeWASocket, {
   Browsers,
   type WASocket,
 } from '@whiskeysockets/baileys';
+import { WHATSAPP_AUTH_DIR } from '../../workspace.js';
 
 export { DisconnectReason };
 export type { WASocket };
@@ -21,7 +21,7 @@ export type CreateSocketOptions = {
 };
 
 export function getDefaultAuthDir(): string {
-  return join(homedir(), '.dorabot', 'whatsapp', 'auth');
+  return WHATSAPP_AUTH_DIR;
 }
 
 export async function createWaSocket(opts: CreateSocketOptions): Promise<WASocket> {

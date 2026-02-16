@@ -1,15 +1,13 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { execFile, execSync } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
 import type { Provider, ProviderRunOptions, ProviderMessage, ProviderAuthStatus, ProviderQueryResult, RunHandle } from './types.js';
+import { DORABOT_DIR, CLAUDE_KEY_PATH, CLAUDE_OAUTH_PATH } from '../workspace.js';
 
 // ── File paths ──────────────────────────────────────────────────────
-const DORABOT_DIR = join(homedir(), '.dorabot');
-const KEY_FILE = join(DORABOT_DIR, '.anthropic-key');
-const OAUTH_FILE = join(DORABOT_DIR, '.claude-oauth.json');
+const KEY_FILE = CLAUDE_KEY_PATH;
+const OAUTH_FILE = CLAUDE_OAUTH_PATH;
 
 // ── OAuth constants (same as Claude Code CLI) ───────────────────────
 const OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';

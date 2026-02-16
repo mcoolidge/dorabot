@@ -1,6 +1,16 @@
 import { readFileSync, existsSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
+import {
+  DORABOT_CONFIG_PATH,
+  GATEWAY_TOKEN_PATH,
+  LEGACY_CODEX_AUTH_PATH,
+  SESSIONS_DIR,
+  SKILLS_DIR,
+  TLS_DIR,
+  WHATSAPP_AUTH_DIR,
+  toHomeAlias,
+} from './workspace.js';
 
 let loadedConfigPath: string | undefined;
 
@@ -161,7 +171,7 @@ const DEFAULT_CONFIG: Config = {
     disabled: [],
     dirs: [
       join(process.cwd(), 'skills'),
-      join(homedir(), '.dorabot', 'skills'),
+      SKILLS_DIR,
     ],
   },
   agents: {},
@@ -169,7 +179,7 @@ const DEFAULT_CONFIG: Config = {
     enabled: false,
     autoAllowBashIfSandboxed: false,
   },
-  sessionDir: join(homedir(), '.dorabot', 'sessions'),
+  sessionDir: SESSIONS_DIR,
   cwd: process.env.DORABOT_ELECTRON ? join(homedir(), 'Desktop') : process.cwd(),
 };
 
@@ -177,7 +187,7 @@ export async function loadConfig(configPath?: string): Promise<Config> {
   const paths = [
     configPath,
     join(process.cwd(), 'dorabot.config.json'),
-    join(homedir(), '.dorabot', 'config.json'),
+    DORABOT_CONFIG_PATH,
   ].filter(Boolean) as string[];
 
   for (const p of paths) {
@@ -224,7 +234,7 @@ export function getConfigValue<K extends keyof Config>(config: Config, key: K): 
 }
 
 export function getConfigPath(): string {
-  return loadedConfigPath || join(homedir(), '.dorabot', 'config.json');
+  return loadedConfigPath || DORABOT_CONFIG_PATH;
 }
 
 export function saveConfig(config: Config): void {
@@ -238,10 +248,10 @@ export const ALWAYS_DENIED = [
   '~/.ssh',
   '~/.gnupg',
   '~/.aws',
-  '~/.dorabot/whatsapp/auth',
-  '~/.dorabot/gateway-token',
-  '~/.dorabot/codex-auth.json',
-  '~/.dorabot/tls',
+  toHomeAlias(WHATSAPP_AUTH_DIR),
+  toHomeAlias(GATEWAY_TOKEN_PATH),
+  toHomeAlias(LEGACY_CODEX_AUTH_PATH),
+  toHomeAlias(TLS_DIR),
   '~/.config/nanoclaw',
 ];
 

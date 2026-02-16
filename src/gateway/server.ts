@@ -35,6 +35,18 @@ import type { ProviderName } from '../config.js';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { classifyToolCall, cleanToolName, isToolAllowed, type Tier } from './tool-policy.js';
 import { AUTONOMOUS_SCHEDULE_ID, buildAutonomousCalendarItem, PULSE_INTERVALS, DEFAULT_PULSE_INTERVAL, pulseIntervalToRrule, rruleToPulseInterval } from '../autonomous.js';
+import {
+  DORABOT_DIR,
+  GATEWAY_TOKEN_PATH,
+  OWNER_CHAT_IDS_PATH,
+  SKILLS_DIR,
+  TELEGRAM_DIR,
+  TELEGRAM_TOKEN_PATH,
+  TLS_CERT_PATH,
+  TLS_DIR,
+  TLS_KEY_PATH,
+  ensureWorkspace,
+} from '../workspace.js';
 
 const DEFAULT_PORT = 18789;
 const DEFAULT_HOST = '127.0.0.1';
@@ -241,10 +253,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const port = opts.port || config.gateway?.port || DEFAULT_PORT;
   const host = opts.host || config.gateway?.host || DEFAULT_HOST;
   const startedAt = Date.now();
+  ensureWorkspace();
 
   // stable gateway auth token — reuse existing, only generate on first run
-  const tokenPath = join(homedir(), '.dorabot', 'gateway-token');
-  mkdirSync(join(homedir(), '.dorabot'), { recursive: true });
+  const tokenPath = GATEWAY_TOKEN_PATH;
+  mkdirSync(DORABOT_DIR, { recursive: true });
   let gatewayToken: string;
   if (existsSync(tokenPath)) {
     gatewayToken = readFileSync(tokenPath, 'utf-8').trim();
@@ -310,7 +323,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     const sk = (event.data as any)?.sessionKey as string | undefined;
 
     // persist agent events to SQLite for cursor-based replay on reconnect
-    if (sk && typeof event.event === 'string' && event.event.startsWith('agent.') && event.event !== 'agent.error') {
+    if (
+      sk
+      && typeof event.event === 'string'
+      && event.event.startsWith('agent.')
+      && event.event !== 'agent.error'
+      && event.event !== 'agent.user_message'
+    ) {
       event.seq = insertEvent(sk, event.event, JSON.stringify(event.data));
     }
 
@@ -419,7 +438,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   // status messages sent to channels while agent is working
   const statusMessages = new Map<string, { channel: string; chatId: string; messageId: string }>();
   // remember the owner's chat ID per channel so the agent can reach them cross-channel
-  const ownerChatIdsFile = join(homedir(), '.dorabot', 'owner-chat-ids.json');
+  const ownerChatIdsFile = OWNER_CHAT_IDS_PATH;
   const ownerChatIds = new Map<string, string>();
 
   // load persisted owner chat IDs from disk
@@ -456,6 +475,29 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const toolLogs = new Map<string, { completed: ToolEntry[]; current: { name: string; inputJson: string; detail: string } | null; lastEditAt: number }>();
   // active RunHandles for message injection into running agent sessions
   const runHandles = new Map<string, RunHandle>();
+  type RunReplyRef = {
+    sessionId: string;
+    source: string;
+    sentAt: number;
+    messagePreview: string;
+  };
+  type ChannelQuestionRef = {
+    sessionId?: string;
+    sessionKey?: string;
+    source?: string;
+    channel: string;
+    chatId: string;
+    chatType: string;
+    question: string;
+    createdAt: number;
+  };
+  const runReplyRefs = new Map<string, RunReplyRef>();
+  const MAX_RUN_REPLY_REFS = 2000;
+  const channelQuestionRefs = new Map<string, ChannelQuestionRef>();
+  const MAX_CHANNEL_QUESTION_REFS = 2000;
+  const QUESTION_LINK_WINDOW_MS = 45 * 60 * 1000;
+  const activeGoalRuns = new Map<string, { sessionKey: string; startedAt: number }>();
+  const goalRunBySession = new Map<string, string>();
   // clean up stale stream events from previous crashes
   cleanupOldEvents();
 
@@ -490,6 +532,273 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     messageMetadata?: import('../session/manager.js').MessageMetadata;
   };
   const pendingReauths = new Map<string, PendingReauth>(); // keyed by chatId
+
+  function runRefKey(channel: string, chatId: string, messageId: string): string {
+    return `${channel}:${chatId}:${messageId}`;
+  }
+
+  function clampPreview(text: string, max = 500): string {
+    return text.replace(/\s+/g, ' ').trim().slice(0, max);
+  }
+
+  function isMarkedRunSource(source: string): boolean {
+    return source === `calendar/${AUTONOMOUS_SCHEDULE_ID}` || source.startsWith('goals/');
+  }
+
+  function extractGoalIdFromSource(source: string): string | null {
+    const m = source.match(/^goals\/([^/]+)$/);
+    return m ? m[1] : null;
+  }
+
+  function buildGoalExecutionPrompt(task: GoalTask): string {
+    const tagLine = task.tags?.length ? `Tags: ${task.tags.join(', ')}` : '';
+    const descriptionLine = task.description ? `Description:\n${task.description}` : 'Description:\n(No extra description provided)';
+
+    return [
+      `Execute goal #${task.id}: ${task.title}`,
+      '',
+      descriptionLine,
+      tagLine,
+      '',
+      'Execution protocol:',
+      '- Push this goal as far as possible toward completion in this run.',
+      '- Default to concrete action, not planning-only responses.',
+      '- Keep the goal state accurate with goals_update (status/result/progress).',
+      '- If blocked by missing user input, ask AskUserQuestion with specific options.',
+      '- If AskUserQuestion times out: message the user on an available channel, sleep 120 seconds, ask once more, then continue with the best defensible assumption and document that assumption in the goal result.',
+      '- For proposed goals: research-only. For approved/in_progress goals: execute aggressively.',
+      '',
+      'Done criteria:',
+      '- Mark done only when objective is achieved.',
+      '- If not done, leave clear progress notes and the next concrete step in result.',
+    ].filter(Boolean).join('\n');
+  }
+
+  function markGoalRunStarted(goalId: string, sessionKey: string): void {
+    activeGoalRuns.set(goalId, { sessionKey, startedAt: Date.now() });
+    goalRunBySession.set(sessionKey, goalId);
+    broadcast({
+      event: 'goals.execution',
+      data: { goalId, sessionKey, status: 'started', timestamp: Date.now() },
+    });
+  }
+
+  function finishGoalRun(sessionKey: string, status: 'completed' | 'error', error?: string): void {
+    const goalId = goalRunBySession.get(sessionKey);
+    if (!goalId) return;
+    const current = activeGoalRuns.get(goalId);
+    if (current?.sessionKey === sessionKey) activeGoalRuns.delete(goalId);
+    goalRunBySession.delete(sessionKey);
+    broadcast({
+      event: 'goals.execution',
+      data: { goalId, sessionKey, status, timestamp: Date.now(), ...(error ? { error } : {}) },
+    });
+  }
+
+  function maybeMarkGoalRunFromSource(source: string, sessionKey: string): void {
+    const goalId = extractGoalIdFromSource(source);
+    if (!goalId) return;
+    if (goalRunBySession.get(sessionKey) === goalId) return;
+    markGoalRunStarted(goalId, sessionKey);
+  }
+
+  function extractRunSessionId(text?: string): string | undefined {
+    if (!text) return undefined;
+    return text.match(/\brun_session_id:\s*([A-Za-z0-9._:-]+)/i)?.[1]
+      || text.match(/\bpulse_session_id:\s*([A-Za-z0-9._:-]+)/i)?.[1];
+  }
+
+  function ensureSessionKeyForSessionId(sessionId: string): string | undefined {
+    const existing = sessionRegistry.list().find(s => s.sessionId === sessionId);
+    if (existing) return existing.key;
+
+    const meta = fileSessionManager.getMetadata(sessionId);
+    if (!meta?.channel || !meta?.chatId) return undefined;
+
+    const chatType = meta.chatType || 'dm';
+    const key = sessionRegistry.makeKey({
+      channel: meta.channel,
+      chatType,
+      chatId: meta.chatId,
+    });
+
+    sessionRegistry.getOrCreate({
+      channel: meta.channel,
+      chatType,
+      chatId: meta.chatId,
+      sessionId,
+    });
+    if (meta.sdkSessionId) sessionRegistry.setSdkSessionId(key, meta.sdkSessionId);
+    return key;
+  }
+
+  function appendRunSessionMarker(
+    text: string,
+    source: string,
+    sessionKey: string,
+    channel?: string,
+  ): string {
+    if (!text.trim()) return text;
+    if (!isMarkedRunSource(source)) return text;
+    if (channel && channel !== 'telegram' && channel !== 'whatsapp') return text;
+    const sessionId = sessionRegistry.get(sessionKey)?.sessionId;
+    if (!sessionId) return text;
+    let out = text;
+    if (!/run_session_id:\s+/i.test(out)) {
+      out = `${out}\n\nrun_session_id: ${sessionId}`;
+    }
+    // Backward-compat for existing pulse parsing.
+    if (source === `calendar/${AUTONOMOUS_SCHEDULE_ID}` && !/pulse_session_id:\s+/i.test(out)) {
+      out = `${out}\npulse_session_id: ${sessionId}`;
+    }
+    return out;
+  }
+
+  function registerRunReplyRef(
+    source: string,
+    sessionKey: string,
+    channel: string,
+    chatId: string,
+    messageId: string,
+    messageText: string,
+  ): void {
+    if (!isMarkedRunSource(source)) return;
+    const sessionId = sessionRegistry.get(sessionKey)?.sessionId;
+    if (!sessionId) return;
+
+    const key = runRefKey(channel, chatId, messageId);
+    runReplyRefs.set(key, {
+      sessionId,
+      source,
+      sentAt: Date.now(),
+      messagePreview: clampPreview(messageText),
+    });
+
+    if (runReplyRefs.size <= MAX_RUN_REPLY_REFS) return;
+    let oldestKey: string | null = null;
+    let oldestTs = Number.POSITIVE_INFINITY;
+    for (const [k, v] of runReplyRefs) {
+      if (v.sentAt < oldestTs) {
+        oldestTs = v.sentAt;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey) runReplyRefs.delete(oldestKey);
+  }
+
+  function registerChannelQuestionRef(requestId: string, ref: ChannelQuestionRef): void {
+    channelQuestionRefs.set(requestId, ref);
+    if (channelQuestionRefs.size <= MAX_CHANNEL_QUESTION_REFS) return;
+
+    let oldestKey: string | null = null;
+    let oldestTs = Number.POSITIVE_INFINITY;
+    for (const [k, v] of channelQuestionRefs) {
+      if (v.createdAt < oldestTs) {
+        oldestTs = v.createdAt;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey) channelQuestionRefs.delete(oldestKey);
+  }
+
+  function findRecentQuestionRef(msg: InboundMessage): ChannelQuestionRef | null {
+    const now = Date.now();
+    let best: ChannelQuestionRef | null = null;
+    for (const ref of channelQuestionRefs.values()) {
+      if (ref.channel !== msg.channel || ref.chatId !== msg.chatId) continue;
+      if (now - ref.createdAt > QUESTION_LINK_WINDOW_MS) continue;
+      if (ref.source && !isMarkedRunSource(ref.source)) continue;
+      if (!best || ref.createdAt > best.createdAt) best = ref;
+    }
+    return best;
+  }
+
+  function resolveLinkedRunSession(msg: InboundMessage): { sessionId: string; sessionKey: string; source?: string; context: string } | null {
+    const inlineSessionId = extractRunSessionId(msg.body) || extractRunSessionId(msg.replyToBody);
+    if (inlineSessionId) {
+      const sessionKey = ensureSessionKeyForSessionId(inlineSessionId);
+      if (!sessionKey) return null;
+      const source = activeRunSources.get(sessionKey);
+      return {
+        sessionId: inlineSessionId,
+        sessionKey,
+        source,
+        context: [
+          'User referenced a prior marked run.',
+          `Run session_id: ${inlineSessionId}`,
+          ...(source ? [`Run source: ${source}`] : []),
+          'Continue this conversation in the same session.',
+        ].join('\n'),
+      };
+    }
+
+    if (msg.replyToId) {
+      const ref = runReplyRefs.get(runRefKey(msg.channel, msg.chatId, msg.replyToId));
+      if (ref) {
+        const sessionKey = ensureSessionKeyForSessionId(ref.sessionId);
+        if (sessionKey) {
+          return {
+            sessionId: ref.sessionId,
+            sessionKey,
+            source: ref.source,
+            context: [
+              'User replied to a prior marked run message.',
+              `Run source: ${ref.source}`,
+              `Run session_id: ${ref.sessionId}`,
+              `Sent at: ${new Date(ref.sentAt).toISOString()}`,
+              `Run message preview: ${ref.messagePreview || '(no preview)'}`,
+              'Continue this conversation in the same session.',
+            ].join('\n'),
+          };
+        }
+      }
+    }
+
+    const recentQuestion = findRecentQuestionRef(msg);
+    if (recentQuestion) {
+      const sessionKey = (recentQuestion.sessionKey && sessionRegistry.get(recentQuestion.sessionKey))
+        ? recentQuestion.sessionKey
+        : (recentQuestion.sessionId ? ensureSessionKeyForSessionId(recentQuestion.sessionId) : undefined);
+      if (sessionKey) {
+        const sessionId = recentQuestion.sessionId || sessionRegistry.get(sessionKey)?.sessionId;
+        if (sessionId) {
+          return {
+            sessionId,
+            sessionKey,
+            source: recentQuestion.source,
+            context: [
+              'User sent a follow-up after a recent AskUserQuestion from a marked run.',
+              `Run source: ${recentQuestion.source || '(unknown)'}`,
+              `Run session_id: ${sessionId}`,
+              `Original question: ${recentQuestion.question}`,
+              `Question sent at: ${new Date(recentQuestion.createdAt).toISOString()}`,
+              'Continue this conversation in the same session.',
+            ].join('\n'),
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function buildIncomingChannelPrompt(msg: InboundMessage, bodyText: string, replyContext?: string): string {
+    const safeSender = (msg.senderName || msg.senderId).replace(/[<>"'&\n\r]/g, '_').slice(0, 50);
+    const safeBody = bodyText.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const mediaAttr = msg.mediaType ? ` media_type="${msg.mediaType}" media_path="${msg.mediaPath || ''}"` : '';
+
+    return [
+      `<incoming_message channel="${msg.channel}" sender="${safeSender}" chat="${msg.chatId}"${mediaAttr}>`,
+      safeBody || (msg.mediaPath ? `[Attached: ${msg.mediaType || 'file'} at ${msg.mediaPath}]` : ''),
+      `</incoming_message>`,
+      ...(replyContext ? [
+        '',
+        '<run_reply_context>',
+        replyContext.replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+        '</run_reply_context>',
+      ] : []),
+    ].join('\n');
+  }
 
   // broadcast session.update so sidebar can show new/updated sessions + running state
   function broadcastSessionUpdate(sessionKey: string) {
@@ -596,7 +905,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   }
 
   // process a channel message (or batched messages) through the agent
-  async function processChannelMessage(msg: InboundMessage, batchedBodies?: string[]) {
+  async function processChannelMessage(
+    msg: InboundMessage,
+    batchedBodies?: string[],
+    runReplyContext?: string,
+    opts?: { sessionKey?: string; source?: string; preserveSessionMetadata?: boolean },
+  ) {
     ownerChatIds.set(msg.channel, msg.chatId);
     persistOwnerChatIds();
 
@@ -641,19 +955,24 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       }
       // otherwise fall through to normal message processing
     }
-    const session = sessionRegistry.getOrCreate({
-      channel: msg.channel,
-      chatType: msg.chatType,
-      chatId: msg.chatId,
-    });
+    let session = opts?.sessionKey ? sessionRegistry.get(opts.sessionKey) : undefined;
+    if (!session) {
+      session = sessionRegistry.getOrCreate({
+        channel: msg.channel,
+        chatType: msg.chatType,
+        chatId: msg.chatId,
+      });
+    }
 
-    // update metadata index
-    fileSessionManager.setMetadata(session.sessionId, {
-      channel: msg.channel,
-      chatId: msg.chatId,
-      chatType: msg.chatType,
-      senderName: msg.senderName,
-    });
+    if (!opts?.preserveSessionMetadata) {
+      // update metadata index
+      fileSessionManager.setMetadata(session.sessionId, {
+        channel: msg.channel,
+        chatId: msg.chatId,
+        chatType: msg.chatType,
+        senderName: msg.senderName,
+      });
+    }
 
     // send status message to channel + start typing indicator (stored in channelRunContexts)
     setupChannelStatus(session.key, msg.channel, msg.chatId);
@@ -665,29 +984,19 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       ? `Multiple messages:\n${batchedBodies.map((b, i) => `${i + 1}. ${b}`).join('\n')}`
       : msg.body;
 
-    // sanitize sender name to prevent injection
-    const safeSender = (msg.senderName || msg.senderId).replace(/[<>"'&\n\r]/g, '_').slice(0, 50);
-    // escape < and > in body to prevent XML tag breakout
-    const safeBody = body.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-    // build media attribute if present
-    const mediaAttr = msg.mediaType ? ` media_type="${msg.mediaType}" media_path="${msg.mediaPath || ''}"` : '';
-
-    const channelPrompt = [
-      `<incoming_message channel="${msg.channel}" sender="${safeSender}" chat="${msg.chatId}"${mediaAttr}>`,
-      safeBody || (msg.mediaPath ? `[Attached: ${msg.mediaType || 'file'} at ${msg.mediaPath}]` : ''),
-      `</incoming_message>`,
-      '',
-    ].join('\n');
+    const replyContext = runReplyContext || resolveLinkedRunSession(msg)?.context;
+    const channelPrompt = buildIncomingChannelPrompt(msg, body, replyContext);
 
     // handleAgentRun may never return for persistent sessions (Claude async generator).
     // Per-turn result handling is done inside the stream loop via channelRunContexts.
     // For non-persistent providers (Codex), this returns normally and cleanup below runs as safety net.
+    const source = opts?.source || `${msg.channel}/${msg.chatId}`;
     const result = await handleAgentRun({
       prompt: channelPrompt,
       sessionKey: session.key,
-      source: `${msg.channel}/${msg.chatId}`,
+      source,
       channel: msg.channel,
+      extraContext: replyContext,
       messageMetadata: {
         channel: msg.channel,
         chatId: msg.chatId,
@@ -715,7 +1024,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       const bodies = queued.map(m => m.body);
       pendingMessages.delete(session.key);
       const lastMsg = queued[queued.length - 1];
-      await processChannelMessage(lastMsg, bodies);
+      await processChannelMessage(lastMsg, bodies, undefined, {
+        sessionKey: session.key,
+        source,
+        preserveSessionMetadata: opts?.preserveSessionMetadata,
+      });
     }
   }
 
@@ -724,21 +1037,27 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     config,
     onMessage: async (msg: InboundMessage) => {
       broadcast({ event: 'channel.message', data: msg });
+      const linkedRun = resolveLinkedRunSession(msg);
+      const runReplyContext = linkedRun?.context;
+      const runSource = linkedRun?.source || `${msg.channel}/${msg.chatId}`;
 
       if (msg.channel === 'desktop') {
         // desktop handled via chat.send RPC, not here
         return;
       }
 
-      let session = sessionRegistry.getOrCreate({
-        channel: msg.channel,
-        chatType: msg.chatType,
-        chatId: msg.chatId,
-      });
+      let session = linkedRun ? sessionRegistry.get(linkedRun.sessionKey) : undefined;
+      if (!session) {
+        session = sessionRegistry.getOrCreate({
+          channel: msg.channel,
+          chatType: msg.chatType,
+          chatId: msg.chatId,
+        });
+      }
 
       // idle timeout: reset session if too long since last message
       const gap = Date.now() - session.lastMessageAt;
-      if (session.messageCount > 0 && gap > IDLE_TIMEOUT_MS) {
+      if (!linkedRun && session.messageCount > 0 && gap > IDLE_TIMEOUT_MS) {
         console.log(`[gateway] idle timeout for ${session.key} (${Math.floor(gap / 3600000)}h), starting new session`);
         fileSessionManager.setMetadata(session.sessionId, { sdkSessionId: undefined });
         sessionRegistry.remove(session.key);
@@ -756,14 +1075,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       const handle = runHandles.get(session.key);
       console.log(`[onMessage] key=${session.key} activeRun=${session.activeRun} handleExists=${!!handle} handleActive=${handle?.active} runQueueHas=${runQueues.has(session.key)}`);
       if (handle?.active) {
-        const safeSender = (msg.senderName || msg.senderId).replace(/[<>"'&\n\r]/g, '_').slice(0, 50);
-        const safeBody = msg.body.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        const mediaAttr = msg.mediaType ? ` media_type="${msg.mediaType}" media_path="${msg.mediaPath || ''}"` : '';
-        const channelPrompt = [
-          `<incoming_message channel="${msg.channel}" sender="${safeSender}" chat="${msg.chatId}"${mediaAttr}>`,
-          safeBody || (msg.mediaPath ? `[Attached: ${msg.mediaType || 'file'} at ${msg.mediaPath}]` : ''),
-          `</incoming_message>`,
-        ].join('\n');
+        const channelPrompt = buildIncomingChannelPrompt(msg, msg.body, runReplyContext);
         console.log(`[onMessage] INJECTING into ${session.key}`);
         handle.inject(channelPrompt);
         fileSessionManager.append(session.sessionId, {
@@ -773,13 +1085,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           metadata: { channel: msg.channel, chatId: msg.chatId, body: msg.body, senderName: msg.senderName },
         });
         broadcast({ event: 'agent.user_message', data: {
-          source: `${msg.channel}/${msg.chatId}`, sessionKey: session.key,
+          source: runSource, sessionKey: session.key,
           prompt: msg.body, injected: true, timestamp: Date.now(),
         }});
         // re-activate if idle between turns
         if (!session.activeRun) {
           sessionRegistry.setActiveRun(session.key, true);
-          broadcast({ event: 'status.update', data: { activeRun: true, source: `${msg.channel}/${msg.chatId}`, sessionKey: session.key } });
+          broadcast({ event: 'status.update', data: { activeRun: true, source: runSource, sessionKey: session.key } });
         }
         // ensure channel context exists for status message creation in stream loop
         if (!channelRunContexts.has(session.key)) {
@@ -806,7 +1118,15 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       }
 
       console.log(`[onMessage] falling through to processChannelMessage for ${session.key}`);
-      await processChannelMessage(msg);
+      if (linkedRun) {
+        await processChannelMessage(msg, undefined, runReplyContext, {
+          sessionKey: session.key,
+          source: runSource,
+          preserveSessionMetadata: true,
+        });
+      } else {
+        await processChannelMessage(msg, undefined, runReplyContext);
+      }
     },
     onCommand: async (channel, cmd, chatId) => {
       const chatType = 'dm';
@@ -839,15 +1159,69 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       if (pending.timeout) clearTimeout(pending.timeout);
       pending.resolve({ approved, reason });
     },
-    onQuestionResponse: (requestId, selectedIndex, label) => {
+    onQuestionResponse: async (requestId, selectedIndex, label) => {
       console.log(`[canUseTool] question response: requestId=${requestId} index=${selectedIndex} label=${label}`);
       const pending = pendingChannelQuestions.get(requestId);
-      if (!pending) {
+      if (pending) {
+        pendingChannelQuestions.delete(requestId);
+        channelQuestionRefs.delete(requestId);
+        pending.resolve(label);
+        return;
+      }
+
+      const ref = channelQuestionRefs.get(requestId);
+      if (!ref) {
         console.log(`[canUseTool] no pending question for ${requestId} (map size: ${pendingChannelQuestions.size})`);
         return;
       }
-      pendingChannelQuestions.delete(requestId);
-      pending.resolve(label);
+      channelQuestionRefs.delete(requestId);
+
+      const linkedSessionKey = (ref.sessionKey && sessionRegistry.get(ref.sessionKey))
+        ? ref.sessionKey
+        : (ref.sessionId ? ensureSessionKeyForSessionId(ref.sessionId) : undefined);
+      const source = ref.source
+        || (linkedSessionKey ? activeRunSources.get(linkedSessionKey) : undefined)
+        || `${ref.channel}/${ref.chatId}`;
+
+      const lateInbound: InboundMessage = {
+        id: `late-q-${requestId}-${Date.now().toString(36)}`,
+        channel: ref.channel,
+        accountId: '',
+        chatId: ref.chatId,
+        chatType: ref.chatType === 'group' ? 'group' : 'dm',
+        senderId: ref.chatId,
+        senderName: 'Owner',
+        body: label,
+        timestamp: Date.now(),
+        raw: {
+          type: 'late_question_response',
+          requestId,
+          selectedIndex,
+          label,
+          question: ref.question,
+        },
+      };
+      const replyContext = [
+        'User answered a previous AskUserQuestion after the original wait window.',
+        `Request ID: ${requestId}`,
+        `Original question: ${ref.question}`,
+        `Selected option: ${label}`,
+        'Continue in the same run session.',
+      ].join('\n');
+
+      try {
+        if (linkedSessionKey) {
+          await processChannelMessage(lateInbound, undefined, replyContext, {
+            sessionKey: linkedSessionKey,
+            source,
+            preserveSessionMetadata: true,
+          });
+        } else {
+          await processChannelMessage(lateInbound, undefined, replyContext);
+        }
+      } catch (err) {
+        console.error('[canUseTool] failed to route late question response:', err);
+      }
     },
     onStatus: (status) => {
       broadcast({ event: 'channel.status', data: status });
@@ -906,15 +1280,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         const useOwnerChannel = item.session !== 'isolated' && !!preferredOwner;
         const runChannel = useOwnerChannel ? preferredOwner!.channel : undefined;
         const runChatId = useOwnerChannel ? preferredOwner!.chatId : undefined;
+        const runSessionChatId = `${item.id}-${Date.now().toString(36)}`;
 
         const session = sessionRegistry.getOrCreate({
           channel: 'calendar',
-          chatId: item.id,
+          chatId: runSessionChatId,
           chatType: 'dm',
         });
         fileSessionManager.setMetadata(session.sessionId, {
           channel: 'calendar',
-          chatId: item.id,
+          chatId: runSessionChatId,
           chatType: 'dm',
           senderName: item.summary,
         });
@@ -943,10 +1318,28 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     // auto-create autonomous schedule if mode is autonomous
     if (config.autonomy === 'autonomous') {
       const existing = scheduler.listItems().find(i => i.id === AUTONOMOUS_SCHEDULE_ID);
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const desired = buildAutonomousCalendarItem(tz);
       if (!existing) {
-        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        scheduler.addItem({ ...buildAutonomousCalendarItem(tz), id: AUTONOMOUS_SCHEDULE_ID });
+        scheduler.addItem({ ...desired, id: AUTONOMOUS_SCHEDULE_ID });
         console.log('[gateway] created autonomy pulse schedule on startup');
+      } else {
+        const needsRefresh =
+          existing.summary !== desired.summary ||
+          existing.description !== desired.description ||
+          existing.message !== desired.message ||
+          existing.timezone !== desired.timezone ||
+          existing.enabled === false;
+        if (needsRefresh) {
+          scheduler.updateItem(AUTONOMOUS_SCHEDULE_ID, {
+            summary: desired.summary,
+            description: desired.description,
+            message: desired.message,
+            timezone: desired.timezone,
+            enabled: true,
+          });
+          console.log('[gateway] refreshed autonomy pulse schedule on startup');
+        }
       }
     }
   }
@@ -1036,9 +1429,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       if ((runChannel === 'telegram' || runChannel === 'whatsapp') && runChatId) {
         console.log(`[canUseTool] AskUserQuestion on ${runChannel}, chatId=${runChatId}, ${(questions as any[]).length} question(s)`);
         const answers: Record<string, string> = {};
+        const runSource = runSessionKey ? activeRunSources.get(runSessionKey) : undefined;
+        const runSession = runSessionKey ? sessionRegistry.get(runSessionKey) : undefined;
         for (let qi = 0; qi < (questions as any[]).length; qi++) {
           const q = (questions as any[])[qi];
           const questionText: string = q.question || `Question ${qi + 1}`;
+          const routedQuestionText = (runSource && runSessionKey)
+            ? appendRunSessionMarker(questionText, runSource, runSessionKey, runChannel)
+            : questionText;
           const opts = (q.options || []) as { label: string; description?: string }[];
           if (!opts.length) continue;
 
@@ -1047,9 +1445,19 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             await channelManager.sendQuestion({
               requestId,
               chatId: runChatId,
-              question: questionText,
+              question: routedQuestionText,
               options: opts,
             }, runChannel);
+            registerChannelQuestionRef(requestId, {
+              sessionId: runSession?.sessionId,
+              sessionKey: runSessionKey,
+              source: runSource,
+              channel: runChannel,
+              chatId: runChatId,
+              chatType: runSession?.chatType || 'dm',
+              question: questionText,
+              createdAt: Date.now(),
+            });
             console.log(`[canUseTool] sent question to ${runChannel}: ${requestId}`);
           } catch (err) {
             console.error(`[canUseTool] failed to send question:`, err);
@@ -1117,8 +1525,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       };
     }
 
-    // check tool allow/deny policy (channel-specific + global)
     const cleanName = cleanToolName(toolName);
+    if (cleanName === 'message' && runSessionKey) {
+      const runSource = activeRunSources.get(runSessionKey);
+      const targetChannel = typeof input.channel === 'string' ? input.channel : runChannel;
+      if (runSource && typeof input.message === 'string') {
+        input.message = appendRunSessionMarker(input.message, runSource, runSessionKey, targetChannel);
+      }
+    }
+
+    // check tool allow/deny policy (channel-specific + global)
     const channelToolPolicy = getChannelToolPolicy(runChannel);
     const globalToolPolicy = config.security?.tools;
     if (!isToolAllowed(cleanName, channelToolPolicy, globalToolPolicy)) {
@@ -1194,6 +1610,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
   // track which channel each active run belongs to (for tool policy lookups)
   const activeRunChannels = new Map<string, string>();
+  const activeRunSources = new Map<string, string>();
 
   // agent run queue (one per session key)
   const runQueues = new Map<string, Promise<void>>();
@@ -1230,8 +1647,10 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
     const run = prev.then(async () => {
       console.log(`[handleAgentRun] prev resolved, starting run for ${sessionKey}`);
+      maybeMarkGoalRunFromSource(source, sessionKey);
       sessionRegistry.setActiveRun(sessionKey, true);
       if (channel) activeRunChannels.set(sessionKey, channel);
+      activeRunSources.set(sessionKey, source);
       // init snapshot
       sessionSnapshots.set(sessionKey, {
         sessionKey, status: 'thinking', text: '',
@@ -1276,6 +1695,18 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
         // track Task tool_use IDs so we can recognize their tool_results
         const taskToolUseIds = new Set<string>();
+        const toolUseMeta = new Map<string, { name: string; input: Record<string, unknown> }>();
+
+        const maybeRegisterRunRefFromToolResult = (toolUseId: string, toolResultText: string) => {
+          const meta = toolUseMeta.get(toolUseId);
+          if (!meta || meta.name !== 'message') return;
+          const sentId = toolResultText.match(/Message sent\. ID:\s*([^\s]+)/)?.[1];
+          const targetChannel = typeof meta.input.channel === 'string' ? meta.input.channel : channel;
+          const targetChatId = typeof meta.input.target === 'string' ? meta.input.target : undefined;
+          const outboundText = typeof meta.input.message === 'string' ? meta.input.message : '';
+          if (!sentId || !targetChannel || !targetChatId) return;
+          registerRunReplyRef(source, sessionKey, targetChannel, targetChatId, sentId, outboundText);
+        };
 
         for await (const msg of gen) {
           const m = msg as Record<string, unknown>;
@@ -1458,6 +1889,20 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               for (const block of content) {
                 const b = block as Record<string, unknown>;
                 if (b.type === 'text' && !isSubagentMsg) agentText = b.text as string;
+                if (b.type === 'tool_use' && typeof b.id === 'string') {
+                  let parsedInput: Record<string, unknown> = {};
+                  if (typeof b.input === 'string') {
+                    try {
+                      const parsed = JSON.parse(b.input);
+                      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                        parsedInput = parsed as Record<string, unknown>;
+                      }
+                    } catch {}
+                  } else if (b.input && typeof b.input === 'object' && !Array.isArray(b.input)) {
+                    parsedInput = b.input as Record<string, unknown>;
+                  }
+                  toolUseMeta.set(b.id, { name: cleanToolName(String(b.name || '')), input: parsedInput });
+                }
                 // broadcast tool_use for non-streaming providers and subagent messages
                 if ((!hadStreamEvents || isSubagentMsg) && b.type === 'tool_use') {
                   const toolName = cleanToolName(b.name as string);
@@ -1516,6 +1961,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                       if (data) imageData = `data:${mime};base64,${data}`;
                     }
                   }
+                  maybeRegisterRunRefFromToolResult(String(block.tool_use_id || ''), resultText);
                   broadcast({
                     event: 'agent.tool_result',
                     data: {
@@ -1549,6 +1995,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             const resultContent = Array.isArray(m.content)
               ? (m.content as Array<Record<string, unknown>>).filter(c => c.type === 'text').map(c => c.text).join('\n')
               : String(m.content || '');
+            maybeRegisterRunRefFromToolResult(toolUseId, resultContent);
             broadcast({
               event: 'agent.tool_result',
               data: {
@@ -1614,9 +2061,15 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               }
               statusMessages.delete(sessionKey);
               if (h && !usedMessageTool && agentText) {
-                try { await h.send(ctx.chatId, agentText); } catch {}
+                try {
+                  const outboundText = appendRunSessionMarker(agentText, source, sessionKey, ctx.channel);
+                  const sent = await h.send(ctx.chatId, outboundText);
+                  registerRunReplyRef(source, sessionKey, ctx.channel, ctx.chatId, sent.id, outboundText);
+                } catch {}
               }
             }
+
+            finishGoalRun(sessionKey, 'completed');
 
             // per-turn: mark idle so sidebar spinner stops
             sessionRegistry.setActiveRun(sessionKey, false);
@@ -1668,17 +2121,20 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         console.log(`[gateway] agent run ended: source=${source} result="${result.result.slice(0, 100)}..." cost=$${result.usage.totalCostUsd?.toFixed(4) || '?'}`);
       } catch (err) {
         console.error(`[gateway] agent error: source=${source}`, err);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        finishGoalRun(sessionKey, 'error', errMsg);
         if (isAuthError(err)) {
           console.log(`[gateway] auth error for ${source}, starting re-auth flow`);
           await startReauthFlow({ prompt, sessionKey, source, channel, chatId: messageMetadata?.chatId, messageMetadata }).catch(() => {});
         }
         broadcast({
           event: 'agent.error',
-          data: { source, sessionKey, error: err instanceof Error ? err.message : String(err), timestamp: Date.now() },
+          data: { source, sessionKey, error: errMsg, timestamp: Date.now() },
         });
       } finally {
         activeAbortControllers.delete(sessionKey);
         activeRunChannels.delete(sessionKey);
+        activeRunSources.delete(sessionKey);
         runHandles.delete(sessionKey);
         // clean up any remaining channel context (typing indicator, status message)
         const ctx = channelRunContexts.get(sessionKey);
@@ -1697,6 +2153,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         broadcastStatus(sessionKey, 'idle');
         broadcast({ event: 'status.update', data: { activeRun: false, source, sessionKey } });
         broadcastSessionUpdate(sessionKey);
+        if (goalRunBySession.has(sessionKey)) {
+          finishGoalRun(sessionKey, 'error', 'run ended');
+        }
       }
     });
 
@@ -2029,7 +2488,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
         case 'channels.telegram.status': {
           const tokenFile = config.channels?.telegram?.tokenFile
-            || join(homedir(), '.dorabot', 'telegram', 'token');
+            || TELEGRAM_TOKEN_PATH;
           const linked = existsSync(tokenFile) && readFileSync(tokenFile, 'utf-8').trim().length > 0;
           const botUsername = linked ? (config.channels?.telegram?.accountId || null) : null;
           return { id, result: { linked, botUsername } };
@@ -2050,7 +2509,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             return { id, error: `Invalid token: ${msg}` };
           }
 
-          const tokenDir = join(homedir(), '.dorabot', 'telegram');
+          const tokenDir = TELEGRAM_DIR;
           mkdirSync(tokenDir, { recursive: true });
           writeFileSync(join(tokenDir, 'token'), token, { mode: 0o600 });
 
@@ -2086,7 +2545,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           await channelManager.stopChannel('telegram');
 
           const tokenFile = config.channels?.telegram?.tokenFile
-            || join(homedir(), '.dorabot', 'telegram', 'token');
+            || TELEGRAM_TOKEN_PATH;
           if (existsSync(tokenFile)) rmSync(tokenFile);
 
           if (config.channels?.telegram) {
@@ -2271,6 +2730,78 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           return { id, result: task };
         }
 
+        case 'goals.execute': {
+          const goalId = params?.id as string;
+          if (!goalId) return { id, error: 'id required' };
+
+          const goals = loadGoals();
+          const task = goals.tasks.find(t => t.id === goalId);
+          if (!task) return { id, error: 'task not found' };
+          if (task.status !== 'approved' && task.status !== 'in_progress') {
+            return { id, error: 'goal must be approved or in_progress to execute' };
+          }
+
+          const existing = activeGoalRuns.get(goalId);
+          if (existing) {
+            const active = sessionRegistry.get(existing.sessionKey)?.activeRun || false;
+            if (active) return { id, error: 'goal execution already running' };
+            activeGoalRuns.delete(goalId);
+            if (goalRunBySession.get(existing.sessionKey) === goalId) {
+              goalRunBySession.delete(existing.sessionKey);
+            }
+          }
+
+          const now = new Date().toISOString();
+          if (task.status === 'approved') {
+            task.status = 'in_progress';
+            task.updatedAt = now;
+            saveGoals(goals);
+            broadcast({ event: 'goals.update', data: {} });
+            macNotify('Dora', `Goal started: ${task.title}`);
+          }
+
+          const chatId = `goal-${goalId}`;
+          const session = sessionRegistry.getOrCreate({
+            channel: 'desktop',
+            chatType: 'dm',
+            chatId,
+          });
+          const sessionKey = session.key;
+          sessionRegistry.incrementMessages(session.key);
+          fileSessionManager.setMetadata(session.sessionId, { channel: 'desktop', chatId, chatType: 'dm' });
+          broadcastSessionUpdate(session.key);
+
+          const prompt = buildGoalExecutionPrompt(task);
+          markGoalRunStarted(goalId, sessionKey);
+
+          void handleAgentRun({
+            prompt,
+            sessionKey,
+            source: `goals/${goalId}`,
+            messageMetadata: {
+              channel: 'desktop',
+              chatId,
+              chatType: 'dm',
+              body: prompt,
+            },
+          }).then((res) => {
+            if (!res) finishGoalRun(sessionKey, 'error', 'goal execution did not start');
+          }).catch((err) => {
+            finishGoalRun(sessionKey, 'error', err instanceof Error ? err.message : String(err));
+          });
+
+          return {
+            id,
+            result: {
+              started: true,
+              goalId,
+              sessionKey,
+              sessionId: session.sessionId,
+              chatId,
+            },
+          };
+        }
+
         // ── Research ──
 
         case 'research.list': {
@@ -2322,7 +2853,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         }
 
         case 'skills.list': {
-          const userSkillsDir = resolve(join('~', '.dorabot', 'skills'));
+          const userSkillsDir = SKILLS_DIR;
           const allSkills = loadAllSkills(config);
           const result = allSkills.map(skill => ({
             name: skill.name,
@@ -2359,7 +2890,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (!name) return { id, error: 'name required' };
           if (/[\/\\]/.test(name)) return { id, error: 'name cannot contain slashes' };
 
-          const skillDir = resolve(join('~', '.dorabot', 'skills', name));
+          const skillDir = join(SKILLS_DIR, name);
           const skillPath = join(skillDir, 'SKILL.md');
 
           // build frontmatter
@@ -2401,13 +2932,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const skill = findSkillByName(name, config);
           if (!skill) return { id, error: `skill not found: ${name}` };
 
-          const userSkillsDir = resolve(join('~', '.dorabot', 'skills'));
+          const userSkillsDir = SKILLS_DIR;
           if (!skill.path.startsWith(userSkillsDir)) {
             return { id, error: 'cannot delete built-in skills' };
           }
 
           try {
-            const skillDir = resolve(join('~', '.dorabot', 'skills', name));
+            const skillDir = join(SKILLS_DIR, name);
             rmSync(skillDir, { recursive: true, force: true });
             return { id, result: { deleted: name } };
           } catch (err) {
@@ -2588,6 +3119,17 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 const item = buildAutonomousCalendarItem(tz);
                 scheduler.addItem({ ...item, id: AUTONOMOUS_SCHEDULE_ID });
                 console.log('[gateway] created autonomy pulse schedule');
+              } else if (value === 'autonomous' && existing) {
+                const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                const desired = buildAutonomousCalendarItem(tz);
+                scheduler.updateItem(AUTONOMOUS_SCHEDULE_ID, {
+                  summary: desired.summary,
+                  description: desired.description,
+                  message: desired.message,
+                  timezone: desired.timezone,
+                  enabled: true,
+                });
+                console.log('[gateway] refreshed autonomy pulse schedule');
               } else if (value === 'supervised' && existing) {
                 scheduler.removeItem(AUTONOMOUS_SCHEDULE_ID);
                 console.log('[gateway] removed autonomy pulse schedule');
@@ -3121,9 +3663,9 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
   // ── TLS setup ───────────────────────────────────────────────
   const useTls = config.gateway?.tls !== false;
-  const tlsDir = join(homedir(), '.dorabot', 'tls');
-  const certPath = join(tlsDir, 'cert.pem');
-  const keyPath = join(tlsDir, 'key.pem');
+  const tlsDir = TLS_DIR;
+  const certPath = TLS_CERT_PATH;
+  const keyPath = TLS_KEY_PATH;
 
   if (useTls && (!existsSync(certPath) || !existsSync(keyPath))) {
     console.log('[gateway] generating self-signed TLS certificate...');

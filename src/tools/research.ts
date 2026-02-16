@@ -3,9 +3,7 @@ import { tool } from '@anthropic-ai/claude-agent-sdk';
 import { getDb } from '../db.js';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
-
-const RESEARCH_DIR = join(homedir(), '.dorabot', 'research');
+import { RESEARCH_DIR } from '../workspace.js';
 
 // ── Types ──
 

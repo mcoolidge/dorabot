@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { BROWSER_PROFILE_DIR } from '../workspace.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -16,7 +17,7 @@ export type BrowserConfig = {
 };
 
 const DEFAULT_CDP_PORT = 19222;
-const DEFAULT_PROFILE_DIR = join(homedir(), '.dorabot', 'browser', 'profile');
+const DEFAULT_PROFILE_DIR = BROWSER_PROFILE_DIR;
 
 // singleton state
 let browser: Browser | null = null;

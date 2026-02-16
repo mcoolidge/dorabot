@@ -9,6 +9,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import type { Provider, ProviderRunOptions, ProviderMessage, ProviderAuthStatus, ProviderQueryResult } from './types.js';
 import type { ReasoningEffort } from '../config.js';
+import { DORABOT_DIR, CODEX_OAUTH_PATH, OPENAI_KEY_PATH } from '../workspace.js';
 
 // ── OAuth constants (same client as Codex CLI) ──────────────────────
 const OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
@@ -19,9 +20,8 @@ const OAUTH_SCOPE = 'openid profile email offline_access';
 const JWT_CLAIM_PATH = 'https://api.openai.com/auth';
 
 // ── File paths ──────────────────────────────────────────────────────
-const DORABOT_DIR = join(homedir(), '.dorabot');
-const CODEX_OAUTH_FILE = join(DORABOT_DIR, '.codex-oauth.json');
-const OPENAI_KEY_FILE = join(DORABOT_DIR, '.openai-key');
+const CODEX_OAUTH_FILE = CODEX_OAUTH_PATH;
+const OPENAI_KEY_FILE = OPENAI_KEY_PATH;
 
 const SUCCESS_HTML = `<!doctype html><html><body><p>Authentication successful. You can close this tab.</p></body></html>`;
 

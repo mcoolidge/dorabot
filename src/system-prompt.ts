@@ -2,7 +2,7 @@ import { hostname } from 'node:os';
 import type { Config } from './config.js';
 import type { Skill } from './skills/loader.js';
 import { type WorkspaceFiles, buildWorkspaceSection, WORKSPACE_DIR, MEMORIES_DIR, loadRecentMemories, getTodayMemoryDir } from './workspace.js';
-import { loadGoals } from './tools/goals.js';
+import { loadGoals, type GoalTask } from './tools/goals.js';
 
 export type SystemPromptOptions = {
   config: Config;
@@ -144,16 +144,42 @@ Don't store secrets or credentials in any memory file.`);
   try {
     const goals = loadGoals();
     const active = goals.tasks.filter(t => !['done', 'rejected'].includes(t.status));
-    if (active.length > 0) {
-      const lines = active.map(t => {
-        const pri = t.priority !== 'medium' ? ` (${t.priority})` : '';
-        const tags = t.tags?.length ? ` [${t.tags.join(', ')}]` : '';
-        return `- #${t.id} [${t.status}] ${t.title}${pri}${tags}`;
-      });
-      sections.push(`## Goals
+    const statusRank: Record<GoalTask['status'], number> = {
+      in_progress: 0,
+      approved: 1,
+      proposed: 2,
+      done: 3,
+      rejected: 4,
+    };
+    const priorityRank: Record<GoalTask['priority'], number> = { high: 0, medium: 1, low: 2 };
+    const sorted = [...active].sort((a, b) => (
+      statusRank[a.status] - statusRank[b.status]
+      || priorityRank[a.priority] - priorityRank[b.priority]
+      || a.createdAt.localeCompare(b.createdAt)
+    ));
+    const lines = sorted.map(t => {
+      const pri = t.priority !== 'medium' ? ` (${t.priority})` : '';
+      const tags = t.tags?.length ? ` [${t.tags.join(', ')}]` : '';
+      return `- #${t.id} [${t.status}] ${t.title}${pri}${tags}`;
+    });
 
-Active goals. Use goals_view/goals_update/goals_add tools to manage.
-Agent-proposed goals need user approval before execution. User-requested goals are auto-approved.
+    sections.push(`## Goal Execution Protocol
+
+Use goals_view/goals_update/goals_add/goals_propose/goals_move tools to manage goals.
+Prioritize goals in this order:
+1. in_progress
+2. approved
+3. proposed (research-only, no implementation until approved)
+
+Execution rules:
+- For in_progress or approved goals, execute aggressively and push toward completion.
+- Keep goal status and result current with goals_update while you work.
+- If blocked on user input, ask AskUserQuestion with specific options.
+- If AskUserQuestion times out: message the user on an available channel, sleep 120 seconds, ask once more, then continue with defensible assumptions and log those assumptions in the goal result.
+- Mark done only when the objective is actually complete.`);
+
+    if (lines.length > 0) {
+      sections.push(`## Active Goals
 
 ${lines.join('\n')}`);
     }

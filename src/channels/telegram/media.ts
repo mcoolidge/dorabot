@@ -1,17 +1,17 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { lookup } from 'mime-types';
 import type { Api } from 'grammy';
+import { TELEGRAM_MEDIA_DIR } from '../../workspace.js';
 
-const MEDIA_DIR = join(homedir(), '.dorabot', 'media', 'telegram');
+const MEDIA_DIR = TELEGRAM_MEDIA_DIR;
 
 function ensureMediaDir(): void {
   mkdirSync(MEDIA_DIR, { recursive: true });
 }
 
 /**
- * Download a Telegram file by file_id and save to ~/.dorabot/media/telegram/.
+ * Download a Telegram file by file_id and save to TELEGRAM_MEDIA_DIR.
  * Returns { path, mimeType } of the saved file.
  */
 export async function downloadTelegramFile(

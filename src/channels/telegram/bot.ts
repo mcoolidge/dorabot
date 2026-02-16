@@ -1,7 +1,6 @@
 import { readFileSync, existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { Bot } from 'grammy';
+import { TELEGRAM_TOKEN_PATH, toHomeAlias } from '../../workspace.js';
 
 export type CreateBotOptions = {
   token: string;
@@ -12,7 +11,7 @@ export function resolveTelegramToken(tokenFile?: string): string {
     return readFileSync(tokenFile, 'utf-8').trim();
   }
 
-  const defaultFile = join(homedir(), '.dorabot', 'telegram', 'token');
+  const defaultFile = TELEGRAM_TOKEN_PATH;
   if (existsSync(defaultFile)) {
     return readFileSync(defaultFile, 'utf-8').trim();
   }
@@ -21,7 +20,7 @@ export function resolveTelegramToken(tokenFile?: string): string {
     return process.env.TELEGRAM_BOT_TOKEN;
   }
 
-  throw new Error('No Telegram bot token found. Set TELEGRAM_BOT_TOKEN env or save to ~/.dorabot/telegram/token');
+  throw new Error(`No Telegram bot token found. Set TELEGRAM_BOT_TOKEN env or save to ${toHomeAlias(TELEGRAM_TOKEN_PATH)}`);
 }
 
 export function createTelegramBot(opts: CreateBotOptions): Bot {

@@ -1,11 +1,12 @@
 import { existsSync, renameSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { DORABOT_DIR } from './workspace.js';
 
 // one-time migration from ~/.my-agent/ to ~/.dorabot/
 export function migrateDataDir(): void {
   const oldDir = join(homedir(), '.my-agent');
-  const newDir = join(homedir(), '.dorabot');
+  const newDir = DORABOT_DIR;
 
   if (existsSync(oldDir) && !existsSync(newDir)) {
     try {
