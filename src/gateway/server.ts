@@ -456,6 +456,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const toolLogs = new Map<string, { completed: ToolEntry[]; current: { name: string; inputJson: string; detail: string } | null; lastEditAt: number }>();
   // active RunHandles for message injection into running agent sessions
   const runHandles = new Map<string, RunHandle>();
+  type PulseReplyRef = {
+    pulseSessionId: string;
+    source: string;
+    sentAt: number;
+    messagePreview: string;
+  };
+  const pulseReplyRefs = new Map<string, PulseReplyRef>();
+  const MAX_PULSE_REPLY_REFS = 2000;
   // clean up stale stream events from previous crashes
   cleanupOldEvents();
 
@@ -490,6 +498,75 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     messageMetadata?: import('../session/manager.js').MessageMetadata;
   };
   const pendingReauths = new Map<string, PendingReauth>(); // keyed by chatId
+
+  function pulseRefKey(channel: string, chatId: string, messageId: string): string {
+    return `${channel}:${chatId}:${messageId}`;
+  }
+
+  function clampPreview(text: string, max = 500): string {
+    return text.replace(/\s+/g, ' ').trim().slice(0, max);
+  }
+
+  function appendPulseSessionMarker(
+    text: string,
+    source: string,
+    sessionKey: string,
+    channel?: string,
+  ): string {
+    if (!text.trim()) return text;
+    if (source !== `calendar/${AUTONOMOUS_SCHEDULE_ID}`) return text;
+    if (channel && channel !== 'telegram') return text;
+    if (/pulse_session_id:\s+/i.test(text)) return text;
+    const sessionId = sessionRegistry.get(sessionKey)?.sessionId;
+    if (!sessionId) return text;
+    return `${text}\n\npulse_session_id: ${sessionId}`;
+  }
+
+  function registerPulseReplyRef(
+    source: string,
+    sessionKey: string,
+    channel: string,
+    chatId: string,
+    messageId: string,
+    messageText: string,
+  ): void {
+    if (source !== `calendar/${AUTONOMOUS_SCHEDULE_ID}`) return;
+    const pulseSessionId = sessionRegistry.get(sessionKey)?.sessionId;
+    if (!pulseSessionId) return;
+
+    const key = pulseRefKey(channel, chatId, messageId);
+    pulseReplyRefs.set(key, {
+      pulseSessionId,
+      source,
+      sentAt: Date.now(),
+      messagePreview: clampPreview(messageText),
+    });
+
+    if (pulseReplyRefs.size <= MAX_PULSE_REPLY_REFS) return;
+    let oldestKey: string | null = null;
+    let oldestTs = Number.POSITIVE_INFINITY;
+    for (const [k, v] of pulseReplyRefs) {
+      if (v.sentAt < oldestTs) {
+        oldestTs = v.sentAt;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey) pulseReplyRefs.delete(oldestKey);
+  }
+
+  function buildPulseReplyContext(msg: InboundMessage): string | undefined {
+    if (!msg.replyToId) return undefined;
+    const ref = pulseReplyRefs.get(pulseRefKey(msg.channel, msg.chatId, msg.replyToId));
+    if (!ref) return undefined;
+    return [
+      'User replied to an autonomy pulse message.',
+      `Pulse source: ${ref.source}`,
+      `Pulse session_id: ${ref.pulseSessionId}`,
+      `Sent at: ${new Date(ref.sentAt).toISOString()}`,
+      `Pulse message preview: ${ref.messagePreview || '(no preview)'}`,
+      'Use memory_read with this session_id to recover full pulse context before responding.',
+    ].join('\n');
+  }
 
   // broadcast session.update so sidebar can show new/updated sessions + running state
   function broadcastSessionUpdate(sessionKey: string) {
@@ -943,10 +1020,28 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     // auto-create autonomous schedule if mode is autonomous
     if (config.autonomy === 'autonomous') {
       const existing = scheduler.listItems().find(i => i.id === AUTONOMOUS_SCHEDULE_ID);
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const desired = buildAutonomousCalendarItem(tz);
       if (!existing) {
-        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        scheduler.addItem({ ...buildAutonomousCalendarItem(tz), id: AUTONOMOUS_SCHEDULE_ID });
+        scheduler.addItem({ ...desired, id: AUTONOMOUS_SCHEDULE_ID });
         console.log('[gateway] created autonomy pulse schedule on startup');
+      } else {
+        const needsRefresh =
+          existing.summary !== desired.summary ||
+          existing.description !== desired.description ||
+          existing.message !== desired.message ||
+          existing.timezone !== desired.timezone ||
+          existing.enabled === false;
+        if (needsRefresh) {
+          scheduler.updateItem(AUTONOMOUS_SCHEDULE_ID, {
+            summary: desired.summary,
+            description: desired.description,
+            message: desired.message,
+            timezone: desired.timezone,
+            enabled: true,
+          });
+          console.log('[gateway] refreshed autonomy pulse schedule on startup');
+        }
       }
     }
   }
@@ -2588,6 +2683,17 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
                 const item = buildAutonomousCalendarItem(tz);
                 scheduler.addItem({ ...item, id: AUTONOMOUS_SCHEDULE_ID });
                 console.log('[gateway] created autonomy pulse schedule');
+              } else if (value === 'autonomous' && existing) {
+                const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+                const desired = buildAutonomousCalendarItem(tz);
+                scheduler.updateItem(AUTONOMOUS_SCHEDULE_ID, {
+                  summary: desired.summary,
+                  description: desired.description,
+                  message: desired.message,
+                  timezone: desired.timezone,
+                  enabled: true,
+                });
+                console.log('[gateway] refreshed autonomy pulse schedule');
               } else if (value === 'supervised' && existing) {
                 scheduler.removeItem(AUTONOMOUS_SCHEDULE_ID);
                 console.log('[gateway] removed autonomy pulse schedule');
