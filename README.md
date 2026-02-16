@@ -9,7 +9,7 @@
   [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
   [![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)](https://github.com/suitedaces/dorabot/releases/latest)
 
-  Personal AI agent with persistent memory, multi-channel messaging (WhatsApp, Telegram, Slack), browser automation, email, Mac control, and a proactive goal system that proposes and ships work without being asked. Runs locally, bring your own model.
+  Always-on autonomous AI agent that works while you sleep. Proposes goals, picks up tasks, ships code, and reports back via WhatsApp/Telegram. Configurable pulse intervals let it check in and make progress on its own schedule. Runs locally, bring your own model.
 
   [Download for macOS](https://github.com/suitedaces/dorabot/releases/latest) · [Website](https://dorabot.dev)
 
@@ -27,17 +27,17 @@
 
 ## What It Does
 
-- **Chat anywhere** - WhatsApp, Telegram, Slack, or the desktop app. Persistent memory across all channels.
-- **Proactive goal management** - The agent proposes goals on its own, you approve via drag-and-drop Kanban board. It tracks progress, reports results, and picks up new work autonomously.
-- **Browse the web** - Fill forms, click buttons, read pages, stay logged in across sessions. 90+ browser actions via Playwright.
-- **Read and send email** - via Himalaya CLI (IMAP/SMTP, no OAuth needed).
-- **Control your Mac** - Windows, apps, Spotify, Calendar, Finder, system settings via AppleScript.
-- **Schedule anything** - One-shot reminders, recurring tasks, iCal-based scheduling with timezone support.
-- **Work with GitHub** - PRs, issues, CI checks, code review via `gh` CLI.
-- **Generate images** - Text-to-image and image editing via Gemini API.
-- **Research and remember** - Full-text search across past conversations, daily journals, research notes. The agent builds context over time.
-- **Connect anything** - 7,300+ MCP servers via [Smithery](https://smithery.ai) registry. Add tools for databases, APIs, SaaS products.
-- **Extend with skills** - 9 built-in skills, 56k+ community skills from the [skills.sh](https://skills.sh) gallery, or ask the agent to create new ones on the fly.
+- **Always-on autonomous mode** - Set pulse intervals (hourly, daily, etc.) and the agent checks in on its own, proposes new work, picks up approved tasks, and reports progress without you asking.
+- **Proactive goal system** - Drag goals through a Kanban board (Proposed → Approved → In Progress → Done). The agent proposes goals autonomously, you approve with a click, it ships the work and messages you when done.
+- **Chat anywhere** - WhatsApp, Telegram, Slack, or desktop app. Same agent, same memory, every channel.
+- **Persistent memory** - Remembers everything. Full-text search across past conversations, builds context over time.
+- **Browser automation** - Fill forms, click buttons, stay logged in across sessions. 90+ actions.
+- **Control your Mac** - Windows, apps, Spotify, Calendar, Finder, system settings.
+- **Work with GitHub** - PRs, issues, CI checks, code review.
+- **Read and send email** - IMAP/SMTP via Himalaya CLI.
+- **Schedule anything** - One-shot or recurring tasks with iCal RRULE.
+- **Extend with skills** - 9 built-in, 56k+ community skills from [skills.sh](https://skills.sh), or ask the agent to create new ones on the fly.
+- **Connect anything** - 7,300+ MCP servers via [Smithery](https://smithery.ai).
 
 https://github.com/user-attachments/assets/d675347a-46c0-4767-b35a-e7a1db6386f9
 
@@ -45,7 +45,7 @@ https://github.com/user-attachments/assets/d675347a-46c0-4767-b35a-e7a1db6386f9
 
 ### Download (recommended)
 
-Download the macOS app from [Releases](https://github.com/suitedaces/dorabot/releases/latest). Open the DMG, drag to Applications, done. The app auto-updates.
+Download the macOS app from [Releases](https://github.com/suitedaces/dorabot/releases/latest). Open the DMG, drag to Applications, done.
 
 **Requirements:** macOS, Chrome/Brave/Edge (for browser features), and a Claude API key or Pro/Max subscription (or OpenAI API key).
 
@@ -60,8 +60,10 @@ npm link
 ```
 
 ```bash
-# development - gateway + desktop with HMR
-npm run dev
+# development
+npm run dev           # gateway + desktop with HMR (auto-reload)
+npm run dev:gateway   # gateway only with watch mode
+npm run dev:cli       # interactive CLI mode
 
 # production
 dorabot -g            # gateway mode - powers desktop app and channels
@@ -71,17 +73,14 @@ dorabot -m "what's the weather in SF?"   # one-off question
 
 ## Desktop App
 
-An Electron app that connects to the gateway over WebSocket.
-
-- **Chat** - Full chat interface with tool streaming UI, model selection, and effort levels
-- **Goals** - Drag-and-drop Kanban board (Proposed, Approved, In Progress, Done)
-- **Research** - View and manage research notes the agent collects over time
-- **Channels** - Set up WhatsApp (QR code), Telegram (bot token), and Slack
-- **Skills** - Browse built-in and community skills, create and edit your own
-- **Connectors** - Add MCP servers from Smithery registry or configure manually
-- **Soul** - Edit personality (SOUL.md), profile (USER.md), and memory (MEMORY.md)
-- **Automations** - Manage scheduled tasks, reminders, and recurring runs with pulse intervals
-- **Settings** - Provider setup, approval modes, sandbox config, tool policies
+- **Chat** - Full conversation view with streaming tool use
+- **Goals** - Kanban board where you drag proposed goals to approved, agent picks them up and works autonomously
+- **Automations** - Set pulse intervals (every 4 hours, daily, weekly, etc.) for autonomous check-ins
+- **Channels** - Set up WhatsApp (QR code), Telegram (bot token), Slack
+- **Skills** - Browse, install, edit. 56k+ community skills from the gallery.
+- **Connectors** - Add MCP servers from Smithery or configure manually
+- **Soul** - Edit personality (SOUL.md), profile (USER.md), memory (MEMORY.md)
+- **Settings** - Model selection, approval modes, tool policies
 
 ## Multi-Provider Support
 
@@ -168,6 +167,7 @@ Ask dorabot to onboard you, or edit the files directly:
 
 All workspace files live in `~/.dorabot/workspace/` and are loaded into every session.
 
+
 ## Architecture
 
 ```
@@ -196,13 +196,13 @@ All workspace files live in `~/.dorabot/workspace/` and are loaded into every se
 └───────┘└──────┘└────────┘└────────┘
 ```
 
-- **Gateway** - Central hub. ~70 RPC methods for config, sessions, channels, scheduling, skills, goals, research, connectors, provider management, and tool approval.
-- **Providers** - Abstract interface. Claude uses Agent SDK (subprocess), Codex uses Codex SDK. Both support session resumption.
-- **Sessions** - SQLite-backed. Persistent across restarts. 4-hour idle timeout for new conversations.
-- **Tools** - Built-in via `claude_code` preset (Read, Write, Bash, etc.) plus custom MCP tools (messaging, browser, screenshot, goals, scheduling) plus external MCP servers.
-- **Browser** - Playwright-based. 90+ actions. Persistent Chrome profile with authenticated sessions.
-- **Memory** - SQLite FTS5 index over all past conversations. Full-text search, daily journals, research notes.
-- **Scheduler** - iCal-based (RRULE). Scheduled runs route through the agent. Configurable pulse intervals for autonomous check-ins.
+- **Gateway** - Central WebSocket server. All clients (desktop, WhatsApp, Telegram, Slack) connect here.
+- **Providers** - Pluggable AI backend. Use Claude (Agent SDK) or OpenAI (Codex SDK). Bring your own API key or OAuth.
+- **Sessions** - SQLite-backed. Persistent across restarts. 4-hour idle timeout.
+- **Tools** - File ops, bash, browser, messaging, goals, scheduling, research, plus external MCP servers.
+- **Browser** - Playwright with persistent profile. Stay logged into sites across sessions.
+- **Memory** - SQLite FTS5. Full-text search over all past conversations.
+- **Pulse** - Configurable intervals for autonomous check-ins. Agent wakes up, checks goals, proposes new work, picks up approved tasks.
 
 ## Config
 
