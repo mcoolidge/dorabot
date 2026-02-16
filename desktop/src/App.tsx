@@ -33,6 +33,10 @@ type UpdateState = {
   message?: string;
 };
 
+const ONBOARDING_COMPLETED_KEY = 'dorabot:onboarding-completed';
+const ONBOARDING_UNAUTH_SNOOZE_UNTIL_KEY = 'dorabot:onboarding-unauth-snooze-until';
+const ONBOARDING_UNAUTH_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
+
 // soft two-tone chime via web audio api
 function playNotifSound() {
   try {
@@ -79,7 +83,7 @@ export default function App() {
   const [selectedChannel, setSelectedChannel] = useState<'whatsapp' | 'telegram'>('whatsapp');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const onboardingCheckedRef = useRef(false);
-  const onboardingCompletedRef = useRef(localStorage.getItem('dorabot:onboarding-completed') === 'true');
+  const onboardingCompletedRef = useRef(localStorage.getItem(ONBOARDING_COMPLETED_KEY) === 'true');
   const focusInputOnGroupSwitch = useRef(false);
   const notifCooldownRef = useRef<Record<string, number>>({});
   const gw = useGateway();
@@ -171,10 +175,17 @@ export default function App() {
   useEffect(() => {
     if (gw.connectionState === 'connected' && gw.providerInfo && !onboardingCheckedRef.current) {
       onboardingCheckedRef.current = true;
-      // Show onboarding if never completed, or if not authenticated (re-show auth flow)
+      const now = Date.now();
+      const unauthSnoozeUntil = Number(localStorage.getItem(ONBOARDING_UNAUTH_SNOOZE_UNTIL_KEY) || '0');
+      const unauthSnoozed = Number.isFinite(unauthSnoozeUntil) && unauthSnoozeUntil > now;
+      if (!unauthSnoozed && unauthSnoozeUntil > 0) {
+        localStorage.removeItem(ONBOARDING_UNAUTH_SNOOZE_UNTIL_KEY);
+      }
+
+      // Show onboarding if never completed, or if auth is missing and not recently snoozed.
       if (!onboardingCompletedRef.current) {
         setShowOnboarding(true);
-      } else if (!gw.providerInfo.auth.authenticated) {
+      } else if (!gw.providerInfo.auth.authenticated && !unauthSnoozed) {
         setShowOnboarding(true);
       }
     }
@@ -635,8 +646,17 @@ export default function App() {
           gateway={gw}
           onComplete={(launchOnboard) => {
             setShowOnboarding(false);
-            localStorage.setItem('dorabot:onboarding-completed', 'true');
+            localStorage.setItem(ONBOARDING_COMPLETED_KEY, 'true');
             onboardingCompletedRef.current = true;
+            const isAuthenticated = !!gw.providerInfo?.auth?.authenticated;
+            if (isAuthenticated) {
+              localStorage.removeItem(ONBOARDING_UNAUTH_SNOOZE_UNTIL_KEY);
+            } else {
+              localStorage.setItem(
+                ONBOARDING_UNAUTH_SNOOZE_UNTIL_KEY,
+                String(Date.now() + ONBOARDING_UNAUTH_SNOOZE_MS),
+              );
+            }
             if (launchOnboard) {
               // Launch the onboard skill in a new chat session
               const created = tabState.newChatTab();

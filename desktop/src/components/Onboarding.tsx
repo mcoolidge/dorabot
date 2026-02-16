@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import { dorabotComputerImg, dorabotImg, whatsappImg, telegramImg } from '../assets';
 import type { useGateway } from '../hooks/useGateway';
 import { ProviderSetup } from './ProviderSetup';
-import { AuroraBackground } from './aceternity/aurora-background';
 import { FlipWords } from './aceternity/flip-words';
 import { TextGenerateEffect } from './aceternity/text-generate-effect';
 import { Card, CardContent } from '@/components/ui/card';
@@ -213,22 +212,33 @@ export function OnboardingOverlay({ gateway, onComplete }: Props) {
   }, [goAfterAuth]);
 
   return (
-    <div className="fixed inset-0 z-50 bg-background">
-      <AuroraBackground className="w-full h-full">
-        <div className="flex flex-col items-center justify-center w-full h-full">
-          {/* Phase bar at top */}
-          {step !== 'welcome' && step !== 'detecting' && (
-            <motion.div
-              className="absolute top-6 left-1/2 -translate-x-1/2 w-64"
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
-            >
-              <PhaseBar step={step} />
-            </motion.div>
-          )}
+    <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm">
+      <div
+        aria-hidden
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background: 'radial-gradient(circle at 50% -10%, oklch(0.5 0.18 250 / 0.14), transparent 58%)',
+        }}
+      />
+      <div className="relative flex flex-col items-center justify-center w-full h-full p-4 sm:p-6">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.98, y: 8 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          transition={{ duration: 0.22, ease: 'easeOut' }}
+          className="w-full max-w-lg rounded-2xl border border-border bg-card/90 shadow-2xl backdrop-blur-xl"
+        >
+          <div className="px-6 py-6 sm:px-8 sm:py-7">
+            {step !== 'welcome' && step !== 'detecting' && (
+              <motion.div
+                className="mb-6"
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.12 }}
+              >
+                <PhaseBar step={step} />
+              </motion.div>
+            )}
 
-          <div className="w-full max-w-sm px-6">
             <AnimatePresence mode="wait">
               {step === 'welcome' && (
                 <PageTransition key="welcome" direction={direction}>
@@ -329,8 +339,8 @@ export function OnboardingOverlay({ gateway, onComplete }: Props) {
               )}
             </AnimatePresence>
           </div>
-        </div>
-      </AuroraBackground>
+        </motion.div>
+      </div>
     </div>
   );
 }
@@ -356,9 +366,9 @@ function WelcomeStep({ onContinue }: { onContinue: () => void }) {
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.3 }}
       >
-        <h1 className="text-xl font-bold text-foreground">welcome to dorabot</h1>
+        <h1 className="text-xl font-bold text-foreground">Welcome to dorabot</h1>
         <p className="text-sm text-muted-foreground">
-          your personal AI assistant that can{' '}
+          Your personal AI assistant that can{' '}
           <FlipWords
             words={['code for you', 'manage your inbox', 'automate tasks', 'browse the web', 'remember everything']}
             duration={2500}
@@ -377,11 +387,11 @@ function WelcomeStep({ onContinue }: { onContinue: () => void }) {
           className="w-full h-10 text-sm font-medium gap-2"
           onClick={onContinue}
         >
-          get started
+          Get started
           <ArrowRight className="w-4 h-4" />
         </Button>
         <div className="text-center text-[10px] text-muted-foreground">
-          takes about 2 minutes
+          Takes about 2 minutes
         </div>
       </motion.div>
     </div>
@@ -397,7 +407,7 @@ function DetectingStep() {
       </div>
       <Loader2 className="w-5 h-5 text-primary animate-spin" />
       <TextGenerateEffect
-        words="checking for existing credentials..."
+        words="Checking for existing credentials..."
         className="text-[11px] text-muted-foreground text-center"
       />
     </div>
@@ -459,8 +469,8 @@ function ChooseStep({
           <img src={dorabotComputerImg} alt="dorabot" className="relative w-20 h-20 dorabot-alive" />
         </div>
         <div>
-          <h1 className="text-base font-semibold text-foreground">connect your AI</h1>
-          <p className="text-[11px] text-muted-foreground mt-1">dorabot uses your existing Claude or OpenAI account</p>
+          <h1 className="text-base font-semibold text-foreground">Connect your AI</h1>
+          <p className="text-[11px] text-muted-foreground mt-1">Dorabot uses your existing Claude or OpenAI account.</p>
         </div>
       </div>
 
@@ -516,12 +526,12 @@ function ChooseStep({
       </div>
 
       <div className="text-center space-y-1">
-        <div className="text-[10px] text-muted-foreground">you can switch anytime in settings</div>
+        <div className="text-[10px] text-muted-foreground">You can switch providers anytime in Settings.</div>
         <button
           onClick={onSkip}
           className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
         >
-          skip for now
+          Skip for now
         </button>
       </div>
     </div>
@@ -1135,33 +1145,33 @@ function PermissionsStep({ onContinue, onBack }: { onContinue: () => void; onBac
 const TOUR_FEATURES = [
   {
     icon: MessageSquare,
-    title: 'chat',
-    description: 'talk to your AI, run tasks, ask questions',
-    color: 'text-blue-400',
+    title: 'Chat',
+    description: 'Talk to your AI, run tasks, and ask questions.',
+    color: 'text-primary',
   },
   {
     icon: Sparkles,
-    title: 'skills',
-    description: 'install plugins for GitHub, email, memes, and more',
-    color: 'text-purple-400',
+    title: 'Skills',
+    description: 'Install new capabilities for your workflows.',
+    color: 'text-foreground',
   },
   {
     icon: Zap,
-    title: 'automations',
-    description: 'scheduled tasks, cron jobs, recurring workflows',
-    color: 'text-yellow-400',
+    title: 'Automations',
+    description: 'Run recurring tasks on a schedule.',
+    color: 'text-warning',
   },
   {
     icon: LayoutGrid,
-    title: 'goals',
-    description: 'track what you\'re working on, let the agent help',
-    color: 'text-green-400',
+    title: 'Goals',
+    description: 'Track outcomes and let the agent help execute.',
+    color: 'text-success',
   },
   {
     icon: Brain,
-    title: 'memory',
-    description: 'persistent memory across sessions, learns your preferences',
-    color: 'text-pink-400',
+    title: 'Memory',
+    description: 'Keep persistent context across sessions.',
+    color: 'text-muted-foreground',
   },
 ];
 
