@@ -33,6 +33,10 @@ type UpdateState = {
   message?: string;
 };
 
+const ONBOARDING_COMPLETED_KEY = 'dorabot:onboarding-completed';
+const ONBOARDING_UNAUTH_SNOOZE_UNTIL_KEY = 'dorabot:onboarding-unauth-snooze-until';
+const ONBOARDING_UNAUTH_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
+
 // soft two-tone chime via web audio api
 function playNotifSound() {
   try {
@@ -79,6 +83,7 @@ export default function App() {
   const [selectedChannel, setSelectedChannel] = useState<'whatsapp' | 'telegram'>('whatsapp');
   const [showOnboarding, setShowOnboarding] = useState(false);
   const onboardingCheckedRef = useRef(false);
+  const onboardingCompletedRef = useRef(localStorage.getItem(ONBOARDING_COMPLETED_KEY) === 'true');
   const focusInputOnGroupSwitch = useRef(false);
   const notifCooldownRef = useRef<Record<string, number>>({});
   const gw = useGateway();
@@ -166,11 +171,21 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Check provider auth on connect - show onboarding if not authenticated
+  // Check provider auth on connect - show onboarding if not completed yet
   useEffect(() => {
     if (gw.connectionState === 'connected' && gw.providerInfo && !onboardingCheckedRef.current) {
       onboardingCheckedRef.current = true;
-      if (!gw.providerInfo.auth.authenticated) {
+      const now = Date.now();
+      const unauthSnoozeUntil = Number(localStorage.getItem(ONBOARDING_UNAUTH_SNOOZE_UNTIL_KEY) || '0');
+      const unauthSnoozed = Number.isFinite(unauthSnoozeUntil) && unauthSnoozeUntil > now;
+      if (!unauthSnoozed && unauthSnoozeUntil > 0) {
+        localStorage.removeItem(ONBOARDING_UNAUTH_SNOOZE_UNTIL_KEY);
+      }
+
+      // Show onboarding if never completed, or if auth is missing and not recently snoozed.
+      if (!onboardingCompletedRef.current) {
+        setShowOnboarding(true);
+      } else if (!gw.providerInfo.auth.authenticated && !unauthSnoozed) {
         setShowOnboarding(true);
       }
     }
@@ -298,13 +313,16 @@ export default function App() {
 
   const handleNavClick = useCallback((navId: TabType) => {
     if (navId === 'chat') {
-      // if already on a chat tab, stay there
-      if (tabState.activeTab && isChatTab(tabState.activeTab)) {
-        return;
-      }
-      const existingChat = tabState.tabs.find(t => isChatTab(t));
-      if (existingChat) {
-        tabState.focusTab(existingChat.id);
+      // Task nav should open a fresh chat unless a blank draft chat already exists.
+      const existingDraftChat = tabState.tabs.find((t) => {
+        if (!isChatTab(t)) return false;
+        if (t.label !== 'new task') return false;
+        if (t.sessionId) return false;
+        const itemCount = gw.sessionStates[t.sessionKey]?.chatItems.length ?? 0;
+        return itemCount === 0;
+      });
+      if (existingDraftChat) {
+        tabState.focusTab(existingDraftChat.id);
       } else {
         tabState.newChatTab();
       }
@@ -312,7 +330,7 @@ export default function App() {
       tabState.openViewTab(navId, NAV_ITEMS.find(n => n.id === navId)?.label || navId);
     }
     setSelectedFile(null);
-  }, [tabState]);
+  }, [tabState, gw.sessionStates]);
 
   // --- Keyboard shortcuts ---
   const shortcutActions = useMemo(() => ({
@@ -629,7 +647,25 @@ export default function App() {
       {showOnboarding && (
         <OnboardingOverlay
           gateway={gw}
-          onComplete={() => setShowOnboarding(false)}
+          onComplete={(launchOnboard) => {
+            setShowOnboarding(false);
+            localStorage.setItem(ONBOARDING_COMPLETED_KEY, 'true');
+            onboardingCompletedRef.current = true;
+            const isAuthenticated = !!gw.providerInfo?.auth?.authenticated;
+            if (isAuthenticated) {
+              localStorage.removeItem(ONBOARDING_UNAUTH_SNOOZE_UNTIL_KEY);
+            } else {
+              localStorage.setItem(
+                ONBOARDING_UNAUTH_SNOOZE_UNTIL_KEY,
+                String(Date.now() + ONBOARDING_UNAUTH_SNOOZE_MS),
+              );
+            }
+            if (launchOnboard) {
+              // Launch the onboard skill in a new chat session
+              const created = tabState.newChatTab();
+              setTimeout(() => gw.sendMessage('onboard', created.sessionKey, created.chatId), 200);
+            }
+          }}
         />
       )}
 
