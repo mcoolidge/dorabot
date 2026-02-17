@@ -70,7 +70,7 @@ function buildPlanDoc(plan: Plan): string {
     '',
     `Status: ${plan.status}`,
     `Type: ${plan.type}`,
-    plan.roadmapItemId ? `Roadmap Item: ${plan.roadmapItemId}` : '',
+    plan.roadmapItemId ? `Idea: ${plan.roadmapItemId}` : '',
     '',
     '## Objective',
     plan.description?.trim() || 'Define the concrete objective for this plan.',
@@ -276,7 +276,7 @@ export const planViewTool = tool(
         `Run state: ${plan.runState}`,
         plan.error ? `Error: ${plan.error}` : '',
         plan.result ? `Result: ${plan.result}` : '',
-        plan.roadmapItemId ? `Roadmap item: ${plan.roadmapItemId}` : '',
+        plan.roadmapItemId ? `Idea: ${plan.roadmapItemId}` : '',
         '',
         content ? `Plan Doc:\n${content}` : '',
       ].filter(Boolean);
@@ -311,7 +311,7 @@ export const planViewTool = tool(
 
 export const planAddTool = tool(
   'plan_add',
-  'Create a new plan. Plans should usually be created from roadmap items.',
+  'Create a new plan. Plans should usually be created from ideas.',
   {
     title: z.string(),
     description: z.string().optional(),

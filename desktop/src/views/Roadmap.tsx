@@ -213,16 +213,16 @@ export function RoadmapView({ gateway }: Props) {
                   <Card key={item.id} className="border-border/60">
                     <CardContent className="p-2.5">
                       <div className="space-y-2">
-                        <div className="text-xs font-medium leading-tight">{item.title}</div>
+                        <div className="line-clamp-2 text-xs font-medium leading-tight">{item.title}</div>
                         <div className="flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
-                          {item.impact ? <Badge variant="outline" className="h-4 text-[9px]">impact {item.impact}</Badge> : null}
-                          {item.effort ? <Badge variant="outline" className="h-4 text-[9px]">effort {item.effort}</Badge> : null}
-                          <Badge variant="outline" className="h-4 text-[9px]">
+                          {item.impact ? <Badge variant="outline" className="h-4 shrink-0 text-[9px]">impact {item.impact}</Badge> : null}
+                          {item.effort ? <Badge variant="outline" className="h-4 shrink-0 text-[9px]">effort {item.effort}</Badge> : null}
+                          <Badge variant="outline" className="h-4 shrink-0 text-[9px]">
                             plans {item.linkedPlanIds?.length || 0}
                           </Badge>
                         </div>
                         {item.outcome && (
-                          <div className="line-clamp-2 text-[11px] text-muted-foreground">{item.outcome}</div>
+                          <div className="line-clamp-2 break-words text-[11px] text-muted-foreground">{item.outcome}</div>
                         )}
                         <div className="flex items-center gap-1">
                           <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => setDetailItem(item)}>
@@ -248,7 +248,7 @@ export function RoadmapView({ gateway }: Props) {
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Add Roadmap Idea</DialogTitle>
+            <DialogTitle>Add Idea</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1">

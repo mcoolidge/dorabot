@@ -162,13 +162,13 @@ Don't store secrets or credentials in any memory file.`);
       const lane = t.roadmapItemId
         ? roadmap.items.find(r => r.id === t.roadmapItemId)?.lane
         : undefined;
-      return `- #${t.id} [${t.status}/${t.runState}] (${t.type}) ${t.title}${tags}${lane ? ` [roadmap:${lane}]` : ''}`;
+      return `- #${t.id} [${t.status}/${t.runState}] (${t.type}) ${t.title}${tags}${lane ? ` [idea:${lane}]` : ''}`;
     });
 
     sections.push(`## Plan Execution Protocol
 
 Use plan_view/plan_update/plan_add/plan_start tools to manage plans.
-Use roadmap_view/roadmap_update/roadmap_create_plan to connect execution with ideas.
+Use roadmap_view/roadmap_update/roadmap_create_plan to connect execution with ideas in the Ideas board.
 Prioritize plans in this order:
 1. in_progress
 2. plan
@@ -191,7 +191,7 @@ Execution rules:
 ${lines.join('\n')}`);
     }
     if (roadmapLines.length > 0) {
-      sections.push(`## Roadmap Snapshot
+      sections.push(`## Ideas Snapshot
 
 ${roadmapLines.join('\n')}`);
     }
