@@ -58,10 +58,6 @@ export function getDb(): Database.Database {
       value TEXT
     );
 
-    -- migrate from old board tables if they exist
-    INSERT OR IGNORE INTO goals_tasks SELECT * FROM board_tasks WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='board_tasks');
-    INSERT OR IGNORE INTO goals_meta SELECT * FROM board_meta WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='board_meta');
-
     -- append-only event log for WebSocket stream replay on reconnect
     CREATE TABLE IF NOT EXISTS stream_events (
       seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,6 +85,21 @@ export function getDb(): Database.Database {
       tokenize='porter unicode61'
     );
   `);
+
+  // migrate from old board tables if they exist
+  const hasBoardTasks = db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='board_tasks'"
+  ).get();
+  if (hasBoardTasks) {
+    db.exec('INSERT OR IGNORE INTO goals_tasks SELECT * FROM board_tasks');
+  }
+
+  const hasBoardMeta = db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='board_meta'"
+  ).get();
+  if (hasBoardMeta) {
+    db.exec('INSERT OR IGNORE INTO goals_meta SELECT * FROM board_meta');
+  }
 
   return db;
 }

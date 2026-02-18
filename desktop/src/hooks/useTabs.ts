@@ -117,7 +117,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     if (activeTab && isChatTab(activeTab)) {
       gw.setActiveSession(activeTab.sessionKey, activeTab.chatId);
     }
-  }, [gw.connectionState, tabs, gw, activeTabId]);
+  }, [gw.connectionState, tabs, activeTabId, gw.trackSession, gw.loadSessionIntoMap, gw.setActiveSession]);
 
   useEffect(() => {
     if (gw.connectionState === 'disconnected') {
@@ -144,7 +144,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
       if (!openSessionKeys.has(sk)) gw.untrackSession(sk);
     }
     subscribedSessionKeysRef.current = openSessionKeys;
-  }, [gw.connectionState, tabs, gw]);
+  }, [gw.connectionState, tabs, gw.trackSession, gw.untrackSession]);
 
   // Recover chat tabs that were persisted without sessionId (e.g. refresh mid-run).
   // Once sessions.list arrives, map by sessionKey/chatId and hydrate history.
@@ -177,7 +177,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     for (const r of recoveries) {
       gw.loadSessionIntoMap(r.sessionId, r.sessionKey, r.chatId);
     }
-  }, [gw.connectionState, gw.sessions, gw, tabs]);
+  }, [gw.connectionState, gw.sessions, tabs, gw.loadSessionIntoMap]);
 
   // Listen for sessionId changes from gateway
   useEffect(() => {
@@ -232,7 +232,17 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     if (isChatTab(fallback)) {
       gw.setActiveSession(fallback.sessionKey, fallback.chatId);
     }
-  }, [tabs, layout, gw]);
+  }, [
+    tabs,
+    layout.visibleGroups,
+    layout.activeGroupId,
+    layout.isMultiPane,
+    layout.resetToSingle,
+    layout.addTabToGroup,
+    layout.setGroupActiveTab,
+    gw.trackSession,
+    gw.setActiveSession,
+  ]);
 
   // Reactively fill empty visible groups with new tabs (handles splits)
   // Runs after render with fresh state — no stale closure issues
@@ -258,7 +268,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
       layout.addTabToGroup(tab.id, group.id);
     }
     setTabs(prev => [...prev, ...newTabs]);
-  }, [layout.visibleGroups, layout.isMultiPane, layout.addTabToGroup, gw]);
+  }, [layout.visibleGroups, layout.isMultiPane, layout.addTabToGroup, gw.newSession, gw.trackSession]);
 
   // Derive activeTab from the active group's activeTabId
   const activeGroup = layout.groups.find(g => g.id === layout.activeGroupId) || layout.groups[0];
@@ -280,7 +290,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
         gw.loadSessionIntoMap(tab.sessionId, tab.sessionKey, tab.chatId);
       }
     }
-  }, [gw, layout]);
+  }, [gw.trackSession, gw.setActiveSession, gw.loadSessionIntoMap, layout.addTabToGroup]);
 
   const focusTab = useCallback((tabId: string, groupId?: GroupId) => {
     const tab = tabs.find(t => t.id === tabId);
@@ -300,7 +310,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
         return rest;
       });
     }
-  }, [tabs, gw, layout]);
+  }, [tabs, gw.setActiveSession, layout.setGroupActiveTab, layout.focusGroup, layout.findGroupForTab, layout.activeGroupId]);
 
   const closeTab = useCallback((tabId: string) => {
     // Remove from layout group (reads current state, queues layout update)
@@ -375,7 +385,20 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
         }
       }
     }
-  }, [activeTabId, tabs, gw, layout]);
+  }, [
+    activeTabId,
+    tabs,
+    gw.untrackSession,
+    gw.trackSession,
+    gw.setActiveSession,
+    layout.removeTabFromGroup,
+    layout.isMultiPane,
+    layout.resetToSingle,
+    layout.addTabToGroup,
+    layout.collapseGroup,
+    layout.groups,
+    layout.activeGroupId,
+  ]);
 
   const openChatTab = useCallback((opts: {
     sessionId?: string;
@@ -429,7 +452,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     setTabs(prev => [...prev, tab]);
     setActiveTabId(id);
     layout.addTabToGroup(id, groupId);
-  }, [tabs, focusTab, layout]);
+  }, [tabs, focusTab, layout.addTabToGroup]);
 
   const newChatTab = useCallback((groupId?: GroupId): { tabId: string; sessionKey: string; chatId: string } => {
     const { sessionKey, chatId } = gw.newSession();
@@ -447,7 +470,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     gw.trackSession(tab.sessionKey);
     layout.addTabToGroup(tab.id, groupId);
     return { tabId: tab.id, sessionKey, chatId };
-  }, [gw, layout]);
+  }, [gw.newSession, gw.trackSession, layout.addTabToGroup]);
 
   const updateTabLabel = useCallback((tabId: string, label: string) => {
     setTabs(prev => prev.map(t => t.id === tabId ? { ...t, label } : t));
@@ -461,7 +484,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     const idx = groupTabs.findIndex(t => t.id === group.activeTabId);
     const next = groupTabs[(idx + 1) % groupTabs.length];
     if (next) focusTab(next.id, group.id);
-  }, [tabs, layout, focusTab]);
+  }, [tabs, layout.groups, layout.activeGroupId, focusTab]);
 
   const prevTab = useCallback(() => {
     const group = layout.groups.find(g => g.id === layout.activeGroupId);
@@ -470,7 +493,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     const idx = groupTabs.findIndex(t => t.id === group.activeTabId);
     const prev = groupTabs[(idx - 1 + groupTabs.length) % groupTabs.length];
     if (prev) focusTab(prev.id, group.id);
-  }, [tabs, layout, focusTab]);
+  }, [tabs, layout.groups, layout.activeGroupId, focusTab]);
 
   const focusTabByIndex = useCallback((index: number) => {
     const group = layout.groups.find(g => g.id === layout.activeGroupId);
@@ -478,7 +501,7 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     const groupTabs = group.tabIds.map(id => tabs.find(t => t.id === id)).filter(Boolean) as Tab[];
     const target = index >= groupTabs.length ? groupTabs[groupTabs.length - 1] : groupTabs[index];
     if (target) focusTab(target.id, group.id);
-  }, [tabs, layout, focusTab]);
+  }, [tabs, layout.groups, layout.activeGroupId, focusTab]);
 
   // Track unread counts for chat tabs not currently visible as active pane tabs.
   useEffect(() => {

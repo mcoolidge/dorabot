@@ -157,7 +157,7 @@ export default function App() {
         || document.querySelector<HTMLTextAreaElement>('.chat-input-area textarea');
       ta?.focus();
     }
-  }, [layout.activeGroupId, layout.groups, tabState.tabs, gw]);
+  }, [layout.activeGroupId, layout.groups, tabState.tabs, gw.setActiveSession]);
 
   useEffect(() => {
     const fetchStars = () => {

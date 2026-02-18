@@ -41,7 +41,7 @@ export function ResearchView({ gateway }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [gateway]);
+  }, [gateway.connectionState, gateway.rpc]);
 
   useEffect(() => { loadItems(); }, [loadItems]);
   useEffect(() => { loadItems(); }, [gateway.researchVersion]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -66,7 +66,7 @@ export function ResearchView({ gateway }: Props) {
       }
     });
     return () => { cancelled = true; };
-  }, [selectedId, gateway]);
+  }, [selectedId, gateway.connectionState, gateway.rpc]);
 
   // re-fetch content when research updates (agent wrote new content)
   useEffect(() => {
@@ -74,7 +74,7 @@ export function ResearchView({ gateway }: Props) {
     gateway.rpc('research.read', { id: selectedId }).then((result: any) => {
       setSelectedContent(result as ResearchItemWithContent);
     }).catch(() => {});
-  }, [gateway.researchVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedId, gateway.connectionState, gateway.rpc, gateway.researchVersion]);
 
   const filtered = filter === 'all' ? items : items.filter(i => i.status === filter);
 
