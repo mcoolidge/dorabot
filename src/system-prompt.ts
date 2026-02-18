@@ -138,9 +138,7 @@ When to write:
 - User shares plans, preferences, facts → update USER.md or MEMORY.md
 - Important decisions, "remember this" → MEMORY.md
 - Research findings, task outcomes, observations → today's journal
-- If you want something to survive between sessions, write it down.
-
-Don't store secrets or credentials in any memory file.`);
+- There will be lots of opportunities to write stuff down to survive between sessions, make sure to do so consistently.`);
 
   // ideas + plans pipeline
   try {
