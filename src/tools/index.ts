@@ -4,7 +4,7 @@ import { calendarTools } from './calendar.js';
 import { screenshotTool } from './screenshot.js';
 import { browserTool } from './browser.js';
 import { plansTools } from './plans.js';
-import { ideasTools } from '../roadmap/tools.js';
+import { ideasTools } from '../ideas/tools.js';
 import { researchTools } from './research.js';
 import { memoryTools } from './memory.js';
 
@@ -13,7 +13,7 @@ export { setScheduler, getScheduler } from './calendar.js';
 export { screenshotTool } from './screenshot.js';
 export { browserTool, setBrowserConfig } from './browser.js';
 export { loadPlans, savePlans, type Plan, type PlansState, type PlanRunState, type PlanStatus, type PlanType } from './plans.js';
-export { loadRoadmap, saveRoadmap, type RoadmapItem, type RoadmapLane, type RoadmapState } from '../roadmap/tools.js';
+export { loadIdeas, saveIdeas, type Idea, type IdeaLane, type IdeasState } from '../ideas/tools.js';
 export { loadResearch, saveResearch, type Research, type ResearchItem } from './research.js';
 
 // all custom tools for this agent

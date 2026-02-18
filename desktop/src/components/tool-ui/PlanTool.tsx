@@ -7,21 +7,21 @@ const TOOL_LABELS: Record<string, string> = {
   plan_add: "add plan",
   plan_update: "update plan",
   plan_start: "start plan",
-  roadmap_view: "view roadmap",
-  roadmap_add: "add roadmap item",
-  roadmap_update: "update roadmap item",
-  roadmap_create_plan: "create plan",
+  ideas_view: "view ideas",
+  ideas_add: "add idea",
+  ideas_update: "update idea",
+  ideas_create_plan: "create plan",
 }
 
 export function PlanTool({ name, input, output, isError }: ToolUIProps) {
   let parsed: any = {}
   try { parsed = JSON.parse(input) } catch {}
 
-  const label = TOOL_LABELS[name] || name.replace("plan_", "").replace("roadmap_", "")
+  const label = TOOL_LABELS[name] || name.replace("plan_", "").replace("ideas_", "")
   const title = parsed.title || ""
   const status = parsed.status || ""
   const id = parsed.id || ""
-  const Icon = name.startsWith('roadmap_') ? Map : LayoutGrid
+  const Icon = name.startsWith('ideas_') ? Map : LayoutGrid
 
   return (
     <div className="space-y-2">

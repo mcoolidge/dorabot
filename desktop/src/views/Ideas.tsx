@@ -28,7 +28,7 @@ type Props = {
   gateway: ReturnType<typeof useGateway>;
 };
 
-type RoadmapItem = {
+type Idea = {
   id: string;
   title: string;
   description?: string;
@@ -47,7 +47,7 @@ type RoadmapItem = {
   sortOrder: number;
 };
 
-const LANES: Array<{ id: RoadmapItem['lane']; label: string; accent: string; dot: string }> = [
+const LANES: Array<{ id: Idea['lane']; label: string; accent: string; dot: string }> = [
   { id: 'now',   label: 'Now',   accent: 'border-l-amber-500',  dot: 'bg-amber-500' },
   { id: 'next',  label: 'Next',  accent: 'border-l-sky-500',    dot: 'bg-sky-500' },
   { id: 'later', label: 'Later', accent: 'border-l-border',     dot: 'bg-muted-foreground' },
@@ -55,9 +55,9 @@ const LANES: Array<{ id: RoadmapItem['lane']; label: string; accent: string; dot
 ];
 
 function DraggableCard({ item, lane, selected, onClick }: {
-  item: RoadmapItem;
+  item: Idea;
   lane: typeof LANES[number];
-  selected: RoadmapItem | null;
+  selected: Idea | null;
   onClick: () => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: item.id });
@@ -118,7 +118,7 @@ function DroppableLane({ lane, children }: { lane: typeof LANES[number]; childre
   );
 }
 
-function IdeaDragOverlay({ activeItem }: { activeItem?: RoadmapItem }) {
+function IdeaDragOverlay({ activeItem }: { activeItem?: Idea }) {
   const { activeNodeRect } = useDndContext();
   if (!activeItem) return <DragOverlay dropAnimation={null} />;
   const lane = LANES.find(l => l.id === activeItem.lane);
@@ -155,14 +155,14 @@ function IdeaDragOverlay({ activeItem }: { activeItem?: RoadmapItem }) {
   );
 }
 
-export function RoadmapView({ gateway }: Props) {
-  const [items, setItems] = useState<RoadmapItem[]>([]);
+export function IdeasView({ gateway }: Props) {
+  const [items, setItems] = useState<Idea[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const [addOpen, setAddOpen] = useState(false);
-  const [selected, setSelected] = useState<RoadmapItem | null>(null);
-  const [draft, setDraft] = useState<Partial<RoadmapItem>>({});
-  const [newIdea, setNewIdea] = useState({ title: '', lane: 'next' as RoadmapItem['lane'], impact: '', effort: '', outcome: '', problem: '' });
+  const [selected, setSelected] = useState<Idea | null>(null);
+  const [draft, setDraft] = useState<Partial<Idea>>({});
+  const [newIdea, setNewIdea] = useState({ title: '', lane: 'next' as Idea['lane'], impact: '', effort: '', outcome: '', problem: '' });
   const [addSaving, setAddSaving] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
 
@@ -178,7 +178,7 @@ export function RoadmapView({ gateway }: Props) {
     try {
       const res = await gateway.rpc('ideas.list');
       if (Array.isArray(res)) {
-        setItems((res as RoadmapItem[]).slice().sort((a, b) =>
+        setItems((res as Idea[]).slice().sort((a, b) =>
           a.lane !== b.lane ? a.lane.localeCompare(b.lane) : (a.sortOrder || 0) - (b.sortOrder || 0)
         ));
       }
@@ -193,11 +193,11 @@ export function RoadmapView({ gateway }: Props) {
 
   const prevVersion = useRef<number | undefined>(undefined);
   useEffect(() => {
-    if (prevVersion.current !== undefined && prevVersion.current !== gateway.roadmapVersion) {
+    if (prevVersion.current !== undefined && prevVersion.current !== gateway.ideasVersion) {
       load();
     }
-    prevVersion.current = gateway.roadmapVersion;
-  }, [gateway.roadmapVersion, load]);
+    prevVersion.current = gateway.ideasVersion;
+  }, [gateway.ideasVersion, load]);
 
   useEffect(() => {
     if (!selected) return;
@@ -206,7 +206,7 @@ export function RoadmapView({ gateway }: Props) {
   }, [items]); // eslint-disable-line
 
   const grouped = useMemo(() => {
-    const map: Record<RoadmapItem['lane'], RoadmapItem[]> = { now: [], next: [], later: [], done: [] };
+    const map: Record<Idea['lane'], Idea[]> = { now: [], next: [], later: [], done: [] };
     for (const item of items) map[item.lane].push(item);
     return map;
   }, [items]);
@@ -217,7 +217,7 @@ export function RoadmapView({ gateway }: Props) {
     setActiveId(null);
     const { active, over } = e;
     if (!over) return;
-    const newLane = over.id as RoadmapItem['lane'];
+    const newLane = over.id as Idea['lane'];
     const item = itemById.get(active.id as string);
     if (!item || item.lane === newLane) return;
     // optimistic
@@ -230,7 +230,7 @@ export function RoadmapView({ gateway }: Props) {
     }
   };
 
-  const openDetail = (item: RoadmapItem) => {
+  const openDetail = (item: Idea) => {
     setSelected(item);
     setDraft({ ...item });
   };
@@ -264,7 +264,7 @@ export function RoadmapView({ gateway }: Props) {
     setBusy(selected.id, true);
     try {
       await gateway.rpc('ideas.update', { id: selected.id, ...draft });
-      const updated = { ...selected, ...draft, updatedAt: new Date().toISOString() } as RoadmapItem;
+      const updated = { ...selected, ...draft, updatedAt: new Date().toISOString() } as Idea;
       setSelected(updated);
       setItems(prev => prev.map(i => i.id === updated.id ? updated : i));
     } catch (err) {
@@ -274,7 +274,7 @@ export function RoadmapView({ gateway }: Props) {
     }
   }, [selected, draft, gateway]);
 
-  const deleteItem = useCallback(async (item: RoadmapItem) => {
+  const deleteItem = useCallback(async (item: Idea) => {
     setBusy(item.id, true);
     try {
       await gateway.rpc('ideas.delete', { id: item.id });
@@ -287,7 +287,7 @@ export function RoadmapView({ gateway }: Props) {
     }
   }, [gateway, selected]);
 
-  const createPlan = useCallback(async (item: RoadmapItem) => {
+  const createPlan = useCallback(async (item: Idea) => {
     setBusy(item.id, true);
     try {
       await gateway.rpc('ideas.create_plan', { ideaId: item.id });
@@ -451,7 +451,7 @@ export function RoadmapView({ gateway }: Props) {
                     ['Audience', 'audience'],
                     ['Risks', 'risks'],
                     ['Notes', 'notes'],
-                  ] as [string, keyof RoadmapItem][]).map(([label, key]) => (
+                  ] as [string, keyof Idea][]).map(([label, key]) => (
                     <div key={key} className="space-y-1.5">
                       <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</Label>
                       <Textarea

@@ -28,7 +28,7 @@ const TOOL_PENDING_TEXT: Record<string, string> = {
   schedule: 'scheduling', list_schedule: 'listing schedule',
   update_schedule: 'updating schedule', cancel_schedule: 'cancelling schedule',
   plan_view: 'viewing plans', plan_add: 'adding plan', plan_update: 'updating plan', plan_start: 'starting plan',
-  roadmap_view: 'viewing roadmap', roadmap_add: 'adding roadmap item', roadmap_update: 'updating roadmap', roadmap_create_plan: 'creating plan',
+  ideas_view: 'viewing ideas', ideas_add: 'adding idea', ideas_update: 'updating idea', ideas_create_plan: 'creating plan',
   research_view: 'viewing research', research_add: 'adding research', research_update: 'updating research',
 };
 
@@ -456,7 +456,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   const [telegramLinkError, setTelegramLinkError] = useState<string | null>(null);
   const [providerInfo, setProviderInfo] = useState<{ name: string; auth: ProviderAuthInfo } | null>(null);
   const [plansVersion, setPlansVersion] = useState(0);
-  const [roadmapVersion, setRoadmapVersion] = useState(0);
+  const [ideasVersion, setRoadmapVersion] = useState(0);
   const [planRuns, setPlanRuns] = useState<Record<string, PlanRun>>({});
   const [researchVersion, setResearchVersion] = useState(0);
   const [backgroundRuns, setBackgroundRuns] = useState<BackgroundRun[]>([]);
@@ -1783,7 +1783,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     telegramUnlink,
     providerInfo,
     plansVersion,
-    roadmapVersion,
+    ideasVersion,
     planRuns,
     researchVersion,
     backgroundRuns,

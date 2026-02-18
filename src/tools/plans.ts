@@ -19,14 +19,14 @@ export type Plan = {
   error?: string;
   result?: string;
   planDocPath: string;
-  roadmapItemId?: string;
+  ideaId?: string;
   sessionKey?: string;
   worktreePath?: string;
   branch?: string;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
-  source: 'agent' | 'user' | 'roadmap';
+  source: 'agent' | 'user' | 'idea';
   tags?: string[];
 };
 
@@ -44,7 +44,7 @@ function parsePlanRow(raw: string): Plan {
     runState: plan.runState || 'idle',
     type: plan.type || 'chore',
     status: plan.status || 'plan',
-    source: plan.source || 'roadmap',
+    source: plan.source || 'idea',
     planDocPath: plan.planDocPath || getPlanDocPath(plan.id),
   };
 }
@@ -70,7 +70,7 @@ function buildPlanDoc(plan: Plan): string {
     '',
     `Status: ${plan.status}`,
     `Type: ${plan.type}`,
-    plan.roadmapItemId ? `Idea: ${plan.roadmapItemId}` : '',
+    plan.ideaId ? `Idea: ${plan.ideaId}` : '',
     '',
     '## Objective',
     plan.description?.trim() || 'Define the concrete objective for this plan.',
@@ -187,7 +187,7 @@ type UpsertPlanInput = {
   type?: PlanType;
   status?: PlanStatus;
   runState?: PlanRunState;
-  roadmapItemId?: string;
+  ideaId?: string;
   source?: Plan['source'];
   tags?: string[];
 };
@@ -206,10 +206,10 @@ function upsertPlan(args: UpsertPlanInput): Plan {
       status: args.status || 'plan',
       runState: args.runState || 'idle',
       planDocPath: '',
-      roadmapItemId: args.roadmapItemId,
+      ideaId: args.ideaId,
       createdAt: now,
       updatedAt: now,
-      source: args.source || 'roadmap',
+      source: args.source || 'idea',
       tags: args.tags,
     };
     plan.planDocPath = getPlanDocPath(plan.id);
@@ -220,7 +220,7 @@ function upsertPlan(args: UpsertPlanInput): Plan {
     plan.type = args.type || plan.type;
     plan.status = args.status || plan.status;
     plan.runState = args.runState || plan.runState;
-    plan.roadmapItemId = args.roadmapItemId ?? plan.roadmapItemId;
+    plan.ideaId = args.ideaId ?? plan.ideaId;
     plan.tags = args.tags ?? plan.tags;
     plan.updatedAt = now;
   }
@@ -234,8 +234,8 @@ export function createPlan(input: Omit<UpsertPlanInput, 'id'>): Plan {
   return upsertPlan(input);
 }
 
-export function createPlanFromRoadmapItem(input: {
-  roadmapItemId: string;
+export function createPlanFromIdea(input: {
+  ideaId: string;
   title: string;
   description?: string;
   type: PlanType;
@@ -247,8 +247,8 @@ export function createPlanFromRoadmapItem(input: {
     type: input.type,
     status: 'plan',
     runState: 'idle',
-    roadmapItemId: input.roadmapItemId,
-    source: 'roadmap',
+    ideaId: input.ideaId,
+    source: 'idea',
     tags: input.tags,
   });
 }
@@ -276,7 +276,7 @@ export const planViewTool = tool(
         `Run state: ${plan.runState}`,
         plan.error ? `Error: ${plan.error}` : '',
         plan.result ? `Result: ${plan.result}` : '',
-        plan.roadmapItemId ? `Idea: ${plan.roadmapItemId}` : '',
+        plan.ideaId ? `Idea: ${plan.ideaId}` : '',
         '',
         content ? `Plan Doc:\n${content}` : '',
       ].filter(Boolean);
@@ -316,7 +316,7 @@ export const planAddTool = tool(
     title: z.string(),
     description: z.string().optional(),
     type: z.enum(['feature', 'bug', 'chore']).optional(),
-    roadmapItemId: z.string().optional(),
+    ideaId: z.string().optional(),
     tags: z.array(z.string()).optional(),
   },
   async (args) => {
@@ -324,8 +324,8 @@ export const planAddTool = tool(
       title: args.title,
       description: args.description,
       type: args.type,
-      roadmapItemId: args.roadmapItemId,
-      source: args.roadmapItemId ? 'roadmap' : 'agent',
+      ideaId: args.ideaId,
+      source: args.ideaId ? 'idea' : 'agent',
       tags: args.tags,
     });
     appendPlanLog(plan.id, 'plan_add', `Plan created: ${plan.title}`, { title: plan.title });

@@ -34,14 +34,14 @@ type Plan = {
   error?: string;
   result?: string;
   planDocPath: string;
-  roadmapItemId?: string;
+  ideaId?: string;
   sessionKey?: string;
   worktreePath?: string;
   branch?: string;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
-  source: 'agent' | 'user' | 'roadmap';
+  source: 'agent' | 'user' | 'idea';
   tags?: string[];
 };
 

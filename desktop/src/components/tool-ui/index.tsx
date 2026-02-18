@@ -45,10 +45,10 @@ const TOOL_MAP: Record<string, React.ComponentType<ToolUIProps>> = {
   plan_add: PlanTool,
   plan_update: PlanTool,
   plan_start: PlanTool,
-  roadmap_view: PlanTool,
-  roadmap_add: PlanTool,
-  roadmap_update: PlanTool,
-  roadmap_create_plan: PlanTool,
+  ideas_view: PlanTool,
+  ideas_add: PlanTool,
+  ideas_update: PlanTool,
+  ideas_create_plan: PlanTool,
   Task: TaskTool,
 }
 

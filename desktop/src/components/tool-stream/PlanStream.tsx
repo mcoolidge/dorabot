@@ -18,10 +18,10 @@ const TOOL_META: Record<string, { icon: typeof LayoutGrid; verb: string; color: 
   plan_add: { icon: Plus, verb: "adding", color: "text-blue-400" },
   plan_update: { icon: Pencil, verb: "updating", color: "text-amber-400" },
   plan_start: { icon: ArrowRightCircle, verb: "starting", color: "text-emerald-400" },
-  roadmap_view: { icon: Eye, verb: "viewing", color: "text-violet-400" },
-  roadmap_add: { icon: Plus, verb: "adding", color: "text-blue-400" },
-  roadmap_update: { icon: Pencil, verb: "updating", color: "text-amber-400" },
-  roadmap_create_plan: { icon: Map, verb: "creating plan", color: "text-emerald-400" },
+  ideas_view: { icon: Eye, verb: "viewing", color: "text-violet-400" },
+  ideas_add: { icon: Plus, verb: "adding", color: "text-blue-400" },
+  ideas_update: { icon: Pencil, verb: "updating", color: "text-amber-400" },
+  ideas_create_plan: { icon: Map, verb: "creating plan", color: "text-emerald-400" },
 }
 
 function MiniBoard({ streaming }: { streaming?: boolean }) {
@@ -128,7 +128,7 @@ export function PlanStream({ name, input, output, isError, streaming }: ToolUIPr
           )}
 
           {/* view filter */}
-          {(name === "plan_view" || name === "roadmap_view") && (parsed.status || parsed.lane) && (
+          {(name === "plan_view" || name === "ideas_view") && (parsed.status || parsed.lane) && (
             <motion.div
               className="text-[10px] text-muted-foreground/60"
               initial={{ opacity: 0 }}

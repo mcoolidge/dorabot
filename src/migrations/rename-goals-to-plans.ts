@@ -60,7 +60,7 @@ function mapLegacyGoal(goal: LegacyGoal): Plan {
     error: mapped.error,
     result: goal.result,
     planDocPath: getPlanDocPath(goal.id),
-    roadmapItemId: undefined,
+    ideaId: undefined,
     sessionKey: undefined,
     worktreePath: undefined,
     branch: undefined,

@@ -12,7 +12,7 @@ import { SettingsView } from '../views/Settings';
 import { SoulView } from '../views/Soul';
 import { ExtensionsView } from '../views/Extensions';
 import { PlansView } from '../views/Plans';
-import { RoadmapView } from '../views/Roadmap';
+import { IdeasView } from '../views/Ideas';
 import { ResearchView } from '../views/Research';
 import { FileViewer } from './FileViewer';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -125,8 +125,8 @@ export function EditorGroupPanel({
         );
       case 'plans':
         return <PlansView gateway={gateway} onViewSession={onViewSession} />;
-      case 'roadmap':
-        return <RoadmapView gateway={gateway} />;
+      case 'ideas':
+        return <IdeasView gateway={gateway} />;
       case 'automation':
         return <Automations gateway={gateway} />;
       case 'research':

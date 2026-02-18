@@ -3,7 +3,7 @@ import type { Config } from './config.js';
 import type { Skill } from './skills/loader.js';
 import { type WorkspaceFiles, buildWorkspaceSection, WORKSPACE_DIR, MEMORIES_DIR, loadRecentMemories, getTodayMemoryDir } from './workspace.js';
 import { loadPlans, type Plan } from './tools/plans.js';
-import { loadRoadmap } from './roadmap/tools.js';
+import { loadIdeas } from './ideas/tools.js';
 
 export type SystemPromptOptions = {
   config: Config;
@@ -143,7 +143,7 @@ When to write:
   // ideas + plans pipeline
   try {
     const plans = loadPlans();
-    const ideas = loadRoadmap();
+    const ideas = loadIdeas();
     const active = plans.tasks.filter(t => t.status !== 'done');
     const statusRank: Record<Plan['status'], number> = {
       in_progress: 0,
@@ -157,8 +157,8 @@ When to write:
     ));
     const planLines = sorted.map(t => {
       const tags = t.tags?.length ? ` [${t.tags.join(', ')}]` : '';
-      const lane = t.roadmapItemId
-        ? ideas.items.find(r => r.id === t.roadmapItemId)?.lane
+      const lane = t.ideaId
+        ? ideas.items.find(r => r.id === t.ideaId)?.lane
         : undefined;
       return `- #${t.id} [${t.status}/${t.runState}] (${t.type}) ${t.title}${tags}${lane ? ` [idea:${lane}]` : ''}`;
     });
