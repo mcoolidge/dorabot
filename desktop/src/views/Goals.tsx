@@ -31,9 +31,12 @@ import {
   Loader2,
   Pause,
   PauseCircle,
+  PenSquare,
   Play,
   PlayCircle,
+  Plus,
   RefreshCw,
+  Save,
   ShieldCheck,
   Target,
   ThumbsDown,
@@ -530,9 +533,17 @@ export function GoalsView({ gateway, onViewSession }: Props) {
               placeholder="Why this goal matters"
               className="min-h-[86px]"
             />
-            <Button className="w-full" onClick={createGoal} disabled={saving === 'goal:create' || !goalTitle.trim()}>
-              Add Goal
-            </Button>
+            <div className="flex justify-end">
+              <Button
+                size="icon-sm"
+                onClick={createGoal}
+                disabled={saving === 'goal:create' || !goalTitle.trim()}
+                title="Create goal"
+                aria-label="Create goal"
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
 
           <ScrollArea className="flex-1 min-h-0">
@@ -674,8 +685,15 @@ export function GoalsView({ gateway, onViewSession }: Props) {
                 placeholder="New task"
                 className="h-9"
               />
-              <Button className="h-9" onClick={createTask} disabled={saving === 'task:create' || !taskTitle.trim()}>
-                Add
+              <Button
+                size="icon-sm"
+                className="h-9 w-9"
+                onClick={createTask}
+                disabled={saving === 'task:create' || !taskTitle.trim()}
+                title="Create task"
+                aria-label="Create task"
+              >
+                <Plus className="h-4 w-4" />
               </Button>
             </div>
 
@@ -920,9 +938,15 @@ export function GoalsView({ gateway, onViewSession }: Props) {
                     <div className="mb-3 text-xs text-muted-foreground">
                       Keep implementation plans in markdown files, not short inline notes.
                     </div>
-                    <Button variant="outline" size="sm" onClick={() => void openPlan(selectedTask)}>
-                      <Eye className="mr-1 h-3.5 w-3.5" />
-                      Open Plan Modal
+                    <Button
+                      variant="outline"
+                      size="icon-sm"
+                      className="h-8 w-8"
+                      onClick={() => void openPlan(selectedTask)}
+                      title="Open plan modal"
+                      aria-label="Open plan modal"
+                    >
+                      <Eye className="h-3.5 w-3.5" />
                     </Button>
                   </div>
 
@@ -948,27 +972,38 @@ export function GoalsView({ gateway, onViewSession }: Props) {
 
               <div className="flex items-center gap-2 border-t border-border p-4">
                 <Button
+                  size="icon-sm"
+                  className="h-8 w-8"
                   onClick={() => void saveTask()}
                   disabled={saving === `task:${selectedTask.id}:save`}
+                  title="Save task"
+                  aria-label="Save task"
                 >
-                  Save
+                  <Save className="h-3.5 w-3.5" />
                 </Button>
 
                 <Button
+                  size="icon-sm"
                   variant="outline"
+                  className="h-8 w-8"
                   onClick={() => void updateTaskStatus(selectedTask.id, 'blocked')}
                   disabled={saving === `task:${selectedTask.id}:status`}
+                  title="Block task"
+                  aria-label="Block task"
                 >
-                  <CircleSlash className="mr-1 h-3.5 w-3.5" />
-                  Block
+                  <CircleSlash className="h-3.5 w-3.5" />
                 </Button>
 
                 <Button
+                  size="icon-sm"
                   variant="destructive"
+                  className="h-8 w-8"
                   onClick={() => void deleteTask(selectedTask.id)}
                   disabled={saving === `task:${selectedTask.id}:delete`}
+                  title="Delete task"
+                  aria-label="Delete task"
                 >
-                  Delete
+                  <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               </div>
             </>
@@ -994,25 +1029,35 @@ export function GoalsView({ gateway, onViewSession }: Props) {
             <div className="flex items-center gap-2">
               <Button
                 variant={planMode === 'preview' ? 'default' : 'outline'}
-                size="sm"
+                size="icon-sm"
+                className="h-8 w-8"
                 onClick={() => setPlanMode('preview')}
                 disabled={planLoading}
+                title="Preview plan"
+                aria-label="Preview plan"
               >
-                <Eye className="mr-1 h-3.5 w-3.5" />
-                Preview
+                <Eye className="h-3.5 w-3.5" />
               </Button>
               <Button
                 variant={planMode === 'edit' ? 'default' : 'outline'}
-                size="sm"
+                size="icon-sm"
+                className="h-8 w-8"
                 onClick={() => setPlanMode('edit')}
                 disabled={planLoading}
+                title="Edit plan"
+                aria-label="Edit plan"
               >
-                <FileText className="mr-1 h-3.5 w-3.5" />
-                Edit
+                <PenSquare className="h-3.5 w-3.5" />
               </Button>
-              <Button size="sm" onClick={() => void savePlan()} disabled={planLoading || planSaving || planMode !== 'edit'}>
-                {planSaving && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
-                Save
+              <Button
+                size="icon-sm"
+                className="h-8 w-8"
+                onClick={() => void savePlan()}
+                disabled={planLoading || planSaving || planMode !== 'edit'}
+                title="Save plan"
+                aria-label="Save plan"
+              >
+                {planSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
               </Button>
             </div>
           </div>
