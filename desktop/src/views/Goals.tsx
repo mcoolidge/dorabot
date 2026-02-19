@@ -147,7 +147,8 @@ export function GoalsView({ gateway, onViewSession, onSetupChat }: Props) {
   const watchTask = useCallback((task: Task) => {
     if (!onViewSession) return;
     if (task.sessionId) {
-      onViewSession(task.sessionId, 'desktop', `task-${task.id}`, 'dm');
+      const parsed = task.sessionKey ? parseSessionKey(task.sessionKey) : null;
+      onViewSession(task.sessionId, parsed?.channel || 'desktop', parsed?.chatId || task.sessionId, parsed?.chatType || 'dm');
       return;
     }
     const parsed = parseSessionKey(task.sessionKey);

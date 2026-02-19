@@ -1715,7 +1715,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       }
     }
 
-    const chatId = `task-${taskId}`;
+    const chatId = randomUUID();
     const session = sessionRegistry.getOrCreate({
       channel: 'desktop',
       chatType: 'dm',
