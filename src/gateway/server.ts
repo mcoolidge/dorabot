@@ -2844,7 +2844,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const prompt = params?.prompt as string;
           if (!prompt) return { id, error: 'prompt required' };
 
-          const chatId = (params?.chatId as string) || `task-${Date.now()}`;
+          const chatId = (params?.chatId as string) || randomUUID();
           const requestedSessionKey = params?.sessionKey as string | undefined;
           // use client-provided sessionKey if it exists in the registry (e.g. replying to a calendar session)
           const existingSession = requestedSessionKey ? sessionRegistry.get(requestedSessionKey) : undefined;

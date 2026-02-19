@@ -3,7 +3,8 @@ import type { useGateway, TaskRun } from '../hooks/useGateway';
 import { toast } from 'sonner';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
-import { Loader2, Wrench, Target } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Loader2, Wrench, Target, Sparkles } from 'lucide-react';
 import type { Goal, Task, GoalStatus, TaskStatus } from './goals/helpers';
 import { getTaskPresentation, sortTasks, parseSessionKey, errorText } from './goals/helpers';
 import { ApprovalBanner } from './goals/ApprovalBanner';
@@ -17,9 +18,10 @@ import { TaskRow } from './goals/TaskRow';
 type Props = {
   gateway: ReturnType<typeof useGateway>;
   onViewSession?: (sessionId: string, channel?: string, chatId?: string, chatType?: string) => void;
+  onSetupChat?: (prompt: string) => void;
 };
 
-export function GoalsView({ gateway, onViewSession }: Props) {
+export function GoalsView({ gateway, onViewSession, onSetupChat }: Props) {
   const [loading, setLoading] = useState(true);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -237,6 +239,33 @@ export function GoalsView({ gateway, onViewSession }: Props) {
       <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         loading...
+      </div>
+    );
+  }
+
+  const isEmpty = goals.length === 0 && tasks.length === 0;
+
+  if (isEmpty) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
+        <Target className="h-8 w-8 text-muted-foreground/30" />
+        <div className="space-y-1">
+          <div className="text-sm text-muted-foreground">no goals yet</div>
+          <div className="text-[11px] text-muted-foreground/60">goals help you track what the agent is working toward</div>
+        </div>
+        <div className="flex items-center gap-3">
+          {onSetupChat && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => onSetupChat('create goals for me based on my history, ask me questions')}
+            >
+              <Sparkles className="mr-1.5 h-3 w-3" />
+              generate goals
+            </Button>
+          )}
+        </div>
       </div>
     );
   }

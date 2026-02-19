@@ -33,7 +33,7 @@ const TABS_STORAGE_KEY = 'dorabot:tabs';
 const ACTIVE_TAB_STORAGE_KEY = 'dorabot:activeTabId';
 
 function makeDefaultChatTab(): ChatTab {
-  const chatId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const chatId = crypto.randomUUID();
   return {
     id: `chat:${chatId}`,
     type: 'chat',

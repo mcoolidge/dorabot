@@ -474,7 +474,7 @@ export function useGateway(url = 'wss://localhost:18789') {
 
   // Refs for event handler (doesn't close over state)
   const activeSessionKeyRef = useRef<string>('');
-  const currentChatIdRef = useRef<string>(`task-${Date.now()}`);
+  const currentChatIdRef = useRef<string>(crypto.randomUUID());
   const trackedSessionsRef = useRef<Set<string>>(new Set());
   const lastSeqRef = useRef<number>(0);
   const lastSeqBySessionRef = useRef<Map<string, number>>(new Map());
@@ -1458,7 +1458,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   }, [rpc]);
 
   const newSession = useCallback(() => {
-    const newChatId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const newChatId = crypto.randomUUID();
     const sk = `desktop:dm:${newChatId}`;
     currentChatIdRef.current = newChatId;
     activeSessionKeyRef.current = sk;

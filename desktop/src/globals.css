@@ -289,22 +289,22 @@
 
 /* markdown viewer (file viewer) */
 .markdown-viewer {
-  @apply p-5 max-w-3xl mx-auto text-foreground;
-  line-height: 1.6;
+  @apply p-5 max-w-3xl mx-auto text-foreground text-[13px];
+  line-height: 1.5;
 }
-.markdown-viewer h1, .markdown-viewer h2, .markdown-viewer h3 { @apply font-semibold my-4; }
-.markdown-viewer h1 { font-size: 24px; }
-.markdown-viewer h2 { font-size: 20px; }
-.markdown-viewer h3 { font-size: 16px; }
-.markdown-viewer p { @apply my-2; }
-.markdown-viewer code { @apply bg-secondary px-1.5 py-0.5 rounded text-sm font-mono; }
-.markdown-viewer pre { @apply bg-card border border-border rounded-md p-3 overflow-x-auto my-2; }
+.markdown-viewer h1, .markdown-viewer h2, .markdown-viewer h3 { @apply font-semibold my-3; }
+.markdown-viewer h1 { font-size: 18px; }
+.markdown-viewer h2 { font-size: 15px; }
+.markdown-viewer h3 { font-size: 13px; }
+.markdown-viewer p { @apply my-1.5; }
+.markdown-viewer code { @apply bg-secondary px-1 py-0.5 rounded text-xs font-mono; }
+.markdown-viewer pre { @apply bg-card border border-border rounded-md p-2.5 overflow-x-auto my-1.5; }
 .markdown-viewer pre code { @apply bg-transparent p-0; }
-.markdown-viewer ul, .markdown-viewer ol { @apply pl-6 my-2; }
+.markdown-viewer ul, .markdown-viewer ol { @apply pl-5 my-1.5; }
 .markdown-viewer a { @apply text-primary hover:underline; }
-.markdown-viewer blockquote { @apply border-l-2 border-border pl-3 my-2 text-muted-foreground; }
-.markdown-viewer table { @apply border-collapse my-2 w-full; }
-.markdown-viewer th, .markdown-viewer td { @apply border border-border px-3 py-1.5 text-left; }
+.markdown-viewer blockquote { @apply border-l-2 border-border pl-3 my-1.5 text-muted-foreground; }
+.markdown-viewer table { @apply border-collapse my-1.5 w-full; }
+.markdown-viewer th, .markdown-viewer td { @apply border border-border px-2.5 py-1 text-left; }
 .markdown-viewer th { @apply bg-secondary font-semibold; }
 
 /* hide scrollbar for tab bar overflow */

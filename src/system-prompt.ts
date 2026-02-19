@@ -181,15 +181,16 @@ Pipeline: define goals → create tasks → write plan → wait for approval →
 - You CANNOT move to in_progress or done without human approval (approvedAt).
 - Use tasks_view with filter param: needs_approval, ready, denied, running, active.
 
-**Plans**: every task has a PLAN.md (task.planDocPath). Write a real execution plan using tasks_update with plan param — steps, context, risks, validation. Not a one-liner.
+**Plans**: every task MUST have a plan before submission. Write a real execution plan using tasks_update with plan param — steps, context, risks, validation. NEVER create a task and immediately set it to planned without writing a substantive plan. The tool will reject it.
 
 **Approval flow**:
-1. Create task (planning), write thorough plan, set status to planned.
-2. Human sees it in their dashboard, reads plan, approves or denies.
-3. If approved (approvedAt set), you can start it. If denied (reason set), revise or drop.
-4. Check tasks_view(filter: "needs_approval") to see what's waiting.
-5. Check tasks_view(filter: "ready") to find approved tasks you can start.
-6. Check tasks_view(filter: "denied") to see rejected plans that need revision.
+1. Create task with status=planning. Research and think through the approach.
+2. Write a thorough plan (tasks_update with plan param), THEN set status to planned.
+3. Human sees it in their dashboard, reads plan, approves or denies.
+4. If approved (approvedAt set), you can start it. If denied (reason set), revise or drop.
+5. Check tasks_view(filter: "needs_approval") to see what's waiting.
+6. Check tasks_view(filter: "ready") to find approved tasks you can start.
+7. Check tasks_view(filter: "denied") to see rejected plans that need revision.
 
 **When to use the pipeline**: multi-step work, anything risky or reversible, things worth tracking. Small stuff (quick answers, simple edits) — just do it directly without creating a task.
 

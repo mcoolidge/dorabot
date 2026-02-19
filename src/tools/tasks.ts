@@ -290,6 +290,10 @@ export const tasksAddTool = tool(
     const now = new Date().toISOString();
     const id = nextId(state.tasks);
     const requestedStatus = args.status || 'planning';
+    // require a plan to mark as planned
+    if (requestedStatus === 'planned' && !args.plan?.trim()) {
+      return { content: [{ type: 'text', text: 'Cannot set status to planned without a plan. Write a detailed plan first.' }] };
+    }
     const status = requestedStatus === 'in_progress' || requestedStatus === 'done'
       ? 'planned'
       : requestedStatus;
@@ -332,6 +336,11 @@ export const tasksUpdateTool = tool(
     const state = loadTasks();
     const task = state.tasks.find(t => t.id === args.id);
     if (!task) return { content: [{ type: 'text', text: `Task #${args.id} not found` }], isError: true };
+
+    // require a plan to transition to planned
+    if (args.status === 'planned' && !args.plan?.trim() && !task.plan?.trim()) {
+      return { content: [{ type: 'text', text: 'Cannot set status to planned without a plan. Write a detailed plan first.' }] };
+    }
 
     if (args.title !== undefined) task.title = args.title;
     if (args.goalId !== undefined) task.goalId = args.goalId || undefined;

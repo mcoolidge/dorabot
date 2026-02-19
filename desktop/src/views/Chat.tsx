@@ -3,7 +3,7 @@ import { dorabotComputerImg } from '../assets';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { useGateway, ChatItem, AskUserQuestion } from '../hooks/useGateway';
-import { ApprovalUI } from '@/components/approval-ui';
+import { ApprovalList } from '@/components/approval-ui';
 import { ToolUI } from '@/components/tool-ui';
 import { ToolStreamCard, hasStreamCard } from '@/components/tool-stream';
 import { InlineErrorBoundary } from '@/components/ErrorBoundary';
@@ -714,20 +714,14 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         />
       ) : null}
 
-      {/* approval cards */}
+      {/* approvals */}
       {sessionApprovals.length > 0 && (
-        <div className="px-4 pt-2 shrink-0 space-y-2">
-          {sessionApprovals.map(a => (
-            <ApprovalUI
-              key={a.requestId}
-              requestId={a.requestId}
-              toolName={a.toolName}
-              input={a.input}
-              timestamp={a.timestamp}
-              onApprove={gateway.approveToolUse}
-              onDeny={gateway.denyToolUse}
-            />
-          ))}
+        <div className="px-4 pt-2 shrink-0">
+          <ApprovalList
+            approvals={sessionApprovals}
+            onApprove={gateway.approveToolUse}
+            onDeny={gateway.denyToolUse}
+          />
         </div>
       )}
 
