@@ -570,10 +570,14 @@ export class ClaudeProvider implements Provider {
     // SDK constraint: string prompt → isSingleUserTurn=true → closes stdin
     // after first result. AsyncIterable prompt → keeps stdin open.
 
+    type ContentBlock =
+      | { type: 'text'; text: string }
+      | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+
     type UserMsg = {
       type: 'user';
       session_id: string;
-      message: { role: 'user'; content: Array<{ type: 'text'; text: string }> };
+      message: { role: 'user'; content: ContentBlock[] };
       parent_tool_use_id: null;
     };
 
@@ -581,15 +585,24 @@ export class ClaudeProvider implements Provider {
     let waitingForMessage: ((msg: UserMsg) => void) | null = null;
     let closed = false;
 
-    const makeUserMsg = (text: string): UserMsg => ({
-      type: 'user',
-      session_id: '',
-      message: { role: 'user', content: [{ type: 'text', text }] },
-      parent_tool_use_id: null,
-    });
+    const makeUserMsg = (text: string, images?: import('./types.js').ImageAttachment[]): UserMsg => {
+      const content: ContentBlock[] = [];
+      if (images?.length) {
+        for (const img of images) {
+          content.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
+        }
+      }
+      content.push({ type: 'text', text });
+      return {
+        type: 'user',
+        session_id: '',
+        message: { role: 'user', content },
+        parent_tool_use_id: null,
+      };
+    };
 
     // Seed the queue with the initial prompt
-    messageQueue.push(makeUserMsg(opts.prompt));
+    messageQueue.push(makeUserMsg(opts.prompt, opts.images));
 
     async function* messageGenerator(): AsyncGenerator<UserMsg, void, unknown> {
       while (!closed && !opts.abortController?.signal.aborted) {
@@ -612,9 +625,9 @@ export class ClaudeProvider implements Provider {
 
     const handle: RunHandle = {
       get active() { return !closed; },
-      inject(text: string): boolean {
+      inject(text: string, images?: import('./types.js').ImageAttachment[]): boolean {
         if (closed) return false;
-        const msg = makeUserMsg(text);
+        const msg = makeUserMsg(text, images);
         if (waitingForMessage) {
           waitingForMessage(msg);
         } else {

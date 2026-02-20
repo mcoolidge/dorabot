@@ -40,7 +40,7 @@ import {
   writeTaskPlanDoc,
   getTaskPlanPath,
 } from '../tools/tasks.js';
-import { loadResearch, saveResearch, readResearchContent, type ResearchItem } from '../tools/research.js';
+import { loadResearch, saveResearch, readResearchContent, writeResearchFile, nextId as nextResearchId, type ResearchItem } from '../tools/research.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, getActiveAuthMethod, isOAuthTokenExpired, onClaudeAuthRequired } from '../providers/claude.js';
 import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired } from '../providers/codex.js';
@@ -316,6 +316,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   // stream event batching: accumulate agent.stream per client, flush every 16ms
   const streamBatches = new Map<WebSocket, { events: string[]; timer: ReturnType<typeof setTimeout> | null }>();
 
+  function flushStreamBatch(ws: WebSocket): void {
+    const batch = streamBatches.get(ws);
+    if (!batch || batch.events.length === 0) return;
+    if (batch.timer) { clearTimeout(batch.timer); batch.timer = null; }
+    if (ws.readyState !== WebSocket.OPEN) { batch.events = []; return; }
+    if (batch.events.length === 1) ws.send(batch.events[0]);
+    else ws.send(JSON.stringify({ event: 'agent.stream_batch', data: batch.events.map(e => JSON.parse(e)) }));
+    batch.events = [];
+  }
+
   function queueStreamEvent(ws: WebSocket, serialized: string): void {
     let batch = streamBatches.get(ws);
     if (!batch) {
@@ -387,6 +397,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       if (event.event === 'agent.stream') {
         queueStreamEvent(ws, data);
       } else {
+        // flush pending stream batch before tool_result so client has the tool_use item
+        if (event.event === 'agent.tool_result') flushStreamBatch(ws);
         ws.send(data);
       }
     }
@@ -2100,6 +2112,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
   async function handleAgentRun(params: {
     prompt: string;
+    images?: Array<{ data: string; mediaType: string }>;
     sessionKey: string;
     source: string;
     channel?: string;
@@ -2107,7 +2120,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     extraContext?: string;
     messageMetadata?: import('../session/manager.js').MessageMetadata;
   }): Promise<AgentResult | null> {
-    const { prompt, sessionKey, source, channel, cwd, extraContext, messageMetadata } = params;
+    const { prompt, images, sessionKey, source, channel, cwd, extraContext, messageMetadata } = params;
     console.log(`[gateway] agent run: source=${source} sessionKey=${sessionKey} prompt="${prompt.slice(0, 80)}..."`);
 
     // pre-run auth check: if dorabot_oauth token is expired, don't waste a run
@@ -2163,6 +2176,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         const lastPulseAt = pulseItem?.lastRunAt ? new Date(pulseItem.lastRunAt).getTime() : undefined;
         const gen = streamAgent({
           prompt,
+          images,
           sessionId: session?.sessionId,
           resumeId,
           config,
@@ -2842,6 +2856,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
         case 'chat.send': {
           const prompt = params?.prompt as string;
+          const images = params?.images as Array<{ data: string; mediaType: string }> | undefined;
           if (!prompt) return { id, error: 'prompt required' };
 
           const chatId = (params?.chatId as string) || randomUUID();
@@ -2872,12 +2887,19 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           // try injection into active run first
           const handle = runHandles.get(sessionKey);
           if (handle?.active) {
-            handle.inject(prompt);
+            handle.inject(prompt, images);
             // record injected user message in session (CLI doesn't echo user text back)
+            const injectedContent: Array<Record<string, unknown>> = [];
+            if (images?.length) {
+              for (const img of images) {
+                injectedContent.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
+              }
+            }
+            injectedContent.push({ type: 'text', text: prompt });
             fileSessionManager.append(session.sessionId, {
               type: 'user',
               timestamp: new Date().toISOString(),
-              content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } },
+              content: { type: 'user', message: { role: 'user', content: injectedContent } },
             });
             broadcast({ event: 'agent.user_message', data: {
               source: 'desktop/chat', sessionKey, prompt, injected: true, timestamp: Date.now(),
@@ -2888,6 +2910,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           // no active session — start new run
           handleAgentRun({
             prompt,
+            images,
             sessionKey,
             source: 'desktop/chat',
           });
@@ -4072,6 +4095,30 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
         // ── Research ──
 
+        case 'research.add': {
+          const topic = (params?.topic as string) || 'uncategorized';
+          const title = (params?.title as string) || 'Untitled';
+          const content = (params?.content as string) || '';
+          const research = loadResearch();
+          const now = new Date().toISOString();
+          const item: ResearchItem = {
+            id: nextResearchId(research),
+            topic,
+            title,
+            filePath: '',
+            status: 'active',
+            sources: (params?.sources as string[]) || undefined,
+            tags: (params?.tags as string[]) || undefined,
+            createdAt: now,
+            updatedAt: now,
+          };
+          item.filePath = writeResearchFile(item, content);
+          research.items.push(item);
+          saveResearch(research);
+          broadcast({ event: 'research.update', data: {} });
+          return { id, result: item };
+        }
+
         case 'research.list': {
           const research = loadResearch();
           return { id, result: research.items };
@@ -4099,6 +4146,15 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (params?.sources !== undefined) item.sources = params.sources as string[];
           if (params?.tags !== undefined) item.tags = params.tags as string[];
           item.updatedAt = new Date().toISOString();
+          // rewrite file if content or metadata changed
+          const content = params?.content !== undefined
+            ? params.content as string
+            : readResearchContent(item.filePath);
+          const oldPath = item.filePath;
+          item.filePath = writeResearchFile(item, content);
+          if (oldPath !== item.filePath && existsSync(oldPath)) {
+            try { unlinkSync(oldPath); } catch {}
+          }
           saveResearch(research);
           broadcast({ event: 'research.update', data: {} });
           macNotify('Dora', `Research updated: ${item.title}`);

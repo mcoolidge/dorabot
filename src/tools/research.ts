@@ -48,7 +48,7 @@ function buildFrontmatter(item: ResearchItem): string {
   return lines.join('\n');
 }
 
-function writeResearchFile(item: ResearchItem, content: string): string {
+export function writeResearchFile(item: ResearchItem, content: string): string {
   const topicDir = join(RESEARCH_DIR, slugify(item.topic));
   mkdirSync(topicDir, { recursive: true });
   const filename = `${slugify(item.title)}.md`;
@@ -95,7 +95,7 @@ export function saveResearch(research: Research): void {
   run();
 }
 
-function nextId(research: Research): string {
+export function nextId(research: Research): string {
   const ids = research.items.map(t => parseInt(t.id, 10)).filter(n => !isNaN(n));
   return String((ids.length > 0 ? Math.max(...ids) : 0) + 1);
 }

@@ -1,8 +1,15 @@
 import type { Config } from '../config.js';
 
+export type ImageAttachment = {
+  /** base64-encoded image data */
+  data: string;
+  /** MIME type, e.g. 'image/png', 'image/jpeg' */
+  mediaType: string;
+};
+
 export type RunHandle = {
   /** Push a user message into the active run's async generator */
-  inject(text: string): boolean;
+  inject(text: string, images?: ImageAttachment[]): boolean;
   /** End the generator → SDK CLI process exits */
   close(): void;
   /** Whether the generator is still alive */
@@ -25,6 +32,7 @@ export type RunHandle = {
 
 export type ProviderRunOptions = {
   prompt: string;
+  images?: ImageAttachment[];
   systemPrompt: string;
   model: string;
   config: Config;

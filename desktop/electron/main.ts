@@ -110,7 +110,8 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     titleBarStyle: 'hiddenInset',
-    backgroundColor: '#0d1117',
+    vibrancy: 'under-window',
+    visualEffectState: 'active',
     icon: getIconPath(),
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),

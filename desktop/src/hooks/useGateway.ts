@@ -89,8 +89,10 @@ function applyStreamEvent(items: ChatItem[], evt: Record<string, unknown>): Chat
   return items;
 }
 
+export type ImageAttachment = { data: string; mediaType: string };
+
 export type ChatItem =
-  | { type: 'user'; content: string; timestamp: number }
+  | { type: 'user'; content: string; images?: ImageAttachment[]; timestamp: number }
   | { type: 'text'; content: string; streaming?: boolean; timestamp: number }
   | { type: 'tool_use'; id: string; name: string; input: string; output?: string; imageData?: string; is_error?: boolean; streaming?: boolean; subItems?: ChatItem[]; timestamp: number }
   | { type: 'thinking'; content: string; streaming?: boolean; timestamp: number }
@@ -166,7 +168,8 @@ export type NotifiableEvent =
   | { type: 'auth.required'; provider: string; reason: string }
   | { type: 'whatsapp.status'; status: string }
   | { type: 'telegram.status'; status: string }
-  | { type: 'calendar'; summary: string };
+  | { type: 'calendar'; summary: string }
+  | { type: 'channel.message'; channel: string; chatId: string; senderId: string; senderName?: string; body: string };
 
 export type BackgroundRun = {
   id: string;
@@ -597,6 +600,10 @@ export function useGateway(url = 'wss://localhost:18789') {
   const streamFlushTimerRef = useRef<number | null>(null);
   const streamQueueStartedAtRef = useRef<number>(0);
   const streamQueueMaxDepthRef = useRef<number>(0);
+
+  // stash for tool results that arrive before their tool_use (server batching race)
+  type PendingToolResult = { toolUseId: string; content: string; imageData?: string; is_error?: boolean; toolName?: string; parentToolUseId?: string | null };
+  const pendingToolResultsRef = useRef<Map<string, PendingToolResult>>(new Map());
   const STREAM_FLUSH_INTERVAL_MS = 16;
   const STREAM_FLUSH_MAX_DELAY_MS = 50;
   const STREAM_QUEUE_OVERLOAD = 250;
@@ -628,6 +635,31 @@ export function useGateway(url = 'wss://localhost:18789') {
         } else {
           next = updateSessionChatItems(next, sk, items => applyStreamEvent(items, evt));
         }
+      }
+      // apply any stashed tool results that now have matching tool_use items
+      const pending = pendingToolResultsRef.current;
+      if (pending.size > 0) {
+        const applied = new Set<string>();
+        for (const [sessionKey, state] of Object.entries(next)) {
+          let items = state.chatItems;
+          let changed = false;
+          for (const [toolUseId, result] of pending) {
+            for (let i = items.length - 1; i >= 0; i--) {
+              const it = items[i];
+              if (it.type === 'tool_use' && it.id === toolUseId) {
+                if (!changed) items = [...items];
+                items[i] = { ...it, output: result.content, imageData: result.imageData, is_error: result.is_error, streaming: false };
+                changed = true;
+                applied.add(toolUseId);
+                break;
+              }
+            }
+          }
+          if (changed) {
+            next = { ...next, [sessionKey]: { ...state, chatItems: items } };
+          }
+        }
+        for (const id of applied) pending.delete(id);
       }
       return next;
     });
@@ -942,6 +974,11 @@ export function useGateway(url = 'wss://localhost:18789') {
             updated[idx] = { ...item, output: d.content, imageData: d.imageData, is_error: d.is_error, streaming: false };
             return updated;
           }
+          // tool_use not created yet (stream batch race) — stash for later
+          pendingToolResultsRef.current.set(d.tool_use_id, {
+            toolUseId: d.tool_use_id, content: d.content, imageData: d.imageData,
+            is_error: d.is_error, toolName: d.toolName, parentToolUseId: d.parentToolUseId,
+          });
           return items;
         }));
         break;
@@ -1069,6 +1106,7 @@ export function useGateway(url = 'wss://localhost:18789') {
       case 'channel.message': {
         const d = data as ChannelMessage;
         setChannelMessages(prev => [...prev.slice(-500), d]);
+        onNotifiableEventRef.current?.({ type: 'channel.message', channel: d.channel, chatId: d.chatId, senderId: d.senderId, senderName: d.senderName, body: d.body });
         break;
       }
 
@@ -1346,7 +1384,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     };
   }, []);
 
-  const sendMessage = useCallback(async (prompt: string, sessionKey?: string, chatId?: string) => {
+  const sendMessage = useCallback(async (prompt: string, sessionKey?: string, chatId?: string, images?: ImageAttachment[]) => {
     const sk = sessionKey || activeSessionKeyRef.current;
     const cid = chatId || sk.split(':').slice(2).join(':') || currentChatIdRef.current;
     activeSessionKeyRef.current = sk;
@@ -1363,13 +1401,13 @@ export function useGateway(url = 'wss://localhost:18789') {
         ...prev,
         [sk]: {
           ...state,
-          chatItems: [...state.chatItems, { type: 'user', content: prompt, timestamp: Date.now() }],
+          chatItems: [...state.chatItems, { type: 'user', content: prompt, images: images?.length ? images : undefined, timestamp: Date.now() }],
           agentStatus: state.agentStatus === 'idle' ? 'thinking...' : state.agentStatus,
         },
       };
     });
     try {
-      const res = await rpc('chat.send', { prompt, chatId: cid, sessionKey: sk }) as { sessionKey?: string } | undefined;
+      const res = await rpc('chat.send', { prompt, images: images?.length ? images : undefined, chatId: cid, sessionKey: sk }) as { sessionKey?: string } | undefined;
       if (res?.sessionKey && res.sessionKey !== sk) {
         // sessionKey changed (e.g. server normalized it) — migrate state
         activeSessionKeyRef.current = res.sessionKey;
@@ -1407,24 +1445,24 @@ export function useGateway(url = 'wss://localhost:18789') {
   }, [loadSessionIntoMap]);
 
   const answerQuestion = useCallback(async (requestId: string, answers: Record<string, string>, sessionKey?: string) => {
+    let success = false;
     try {
       await rpc('chat.answerQuestion', { requestId, answers });
-      const sk = sessionKey || activeSessionKeyRef.current;
-      setSessionStates(prev => {
-        const state = prev[sk];
-        if (!state) return prev;
-        return { ...prev, [sk]: { ...state, pendingQuestion: null, agentStatus: 'thinking...' } };
-      });
+      success = true;
     } catch (err) {
       console.error('failed to answer question:', err);
-      // question already timed out or gone server-side — clear UI anyway
-      const sk = sessionKey || activeSessionKeyRef.current;
-      setSessionStates(prev => {
-        const state = prev[sk];
-        if (!state) return prev;
-        return { ...prev, [sk]: { ...state, pendingQuestion: null } };
-      });
     }
+    const sk = sessionKey || activeSessionKeyRef.current;
+    setSessionStates(prev => {
+      const state = prev[sk];
+      if (!state) return prev;
+      const chatItems = state.chatItems.map(it =>
+        it.type === 'tool_use' && it.name === 'AskUserQuestion' && it.streaming
+          ? { ...it, streaming: false }
+          : it
+      );
+      return { ...prev, [sk]: { ...state, chatItems, pendingQuestion: null, ...(success ? { agentStatus: 'thinking...' } : {}) } };
+    });
   }, [rpc]);
 
   const dismissQuestion = useCallback((sessionKey?: string) => {
@@ -1455,10 +1493,17 @@ export function useGateway(url = 'wss://localhost:18789') {
   }, [rpc]);
 
   const abortAgent = useCallback(async (sessionKey?: string) => {
+    const sk = sessionKey || activeSessionKeyRef.current;
     try {
-      await rpc('agent.abort', { sessionKey: sessionKey || activeSessionKeyRef.current });
-    } catch (err) {
-      console.error('failed to abort:', err);
+      // try graceful interrupt first (stops generation, keeps session alive)
+      await rpc('agent.interrupt', { sessionKey: sk });
+    } catch {
+      // fall back to hard abort if interrupt not supported
+      try {
+        await rpc('agent.abort', { sessionKey: sk });
+      } catch (err) {
+        console.error('failed to abort:', err);
+      }
     }
   }, [rpc]);
 
