@@ -33,7 +33,7 @@ const TABS_STORAGE_KEY = 'dorabot:tabs';
 const ACTIVE_TAB_STORAGE_KEY = 'dorabot:activeTabId';
 
 function makeDefaultChatTab(): ChatTab {
-  const chatId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const chatId = crypto.randomUUID();
   return {
     id: `chat:${chatId}`,
     type: 'chat',
@@ -50,14 +50,26 @@ function loadTabsFromStorage(): Tab[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as Tab[];
     if (!Array.isArray(parsed) || parsed.length === 0) return [];
-    return parsed;
+    return parsed.map((tab) => {
+      if ((tab as any).type === 'plans' || (tab as any).type === 'ideas' || (tab as any).type === 'roadmap') {
+        return {
+          ...(tab as any),
+          id: 'view:goals',
+          type: 'goals',
+          label: 'Goals',
+        } as Tab;
+      }
+      return tab;
+    });
   } catch {
     return [];
   }
 }
 
 function loadActiveTabIdFromStorage(): string | null {
-  return localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+  const value = localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+  if (value === 'view:plans' || value === 'view:ideas' || value === 'view:roadmap') return 'view:goals';
+  return value;
 }
 
 export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<typeof useLayout>) {
@@ -193,6 +205,21 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
       gw.onSessionIdChangeRef.current = null;
     };
   }, [gw.onSessionIdChangeRef]);
+
+  // Update tab label with first message preview
+  useEffect(() => {
+    gw.onFirstMessageRef.current = (sessionKey: string, preview: string) => {
+      setTabs(prev => prev.map(tab => {
+        if (isChatTab(tab) && tab.sessionKey === sessionKey && tab.label === 'new task') {
+          return { ...tab, label: preview };
+        }
+        return tab;
+      }));
+    };
+    return () => {
+      gw.onFirstMessageRef.current = null;
+    };
+  }, [gw.onFirstMessageRef]);
 
   // Persist tabs
   useEffect(() => {

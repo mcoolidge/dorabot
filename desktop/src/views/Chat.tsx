@@ -3,7 +3,7 @@ import { dorabotComputerImg } from '../assets';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { useGateway, ChatItem, AskUserQuestion } from '../hooks/useGateway';
-import { ApprovalUI } from '@/components/approval-ui';
+import { ApprovalList } from '@/components/approval-ui';
 import { ToolUI } from '@/components/tool-ui';
 import { ToolStreamCard, hasStreamCard } from '@/components/tool-stream';
 import { InlineErrorBoundary } from '@/components/ErrorBoundary';
@@ -50,24 +50,41 @@ const TOOL_TEXT: Record<string, { pending: string; done: string }> = {
   NotebookEdit: { pending: 'Editing notebook', done: 'Edited notebook' },
   message: { pending: 'Sending message', done: 'Sent message' },
   screenshot: { pending: 'Taking screenshot', done: 'Took screenshot' },
-  schedule_reminder: { pending: 'Scheduling reminder', done: 'Scheduled reminder' },
-  schedule_recurring: { pending: 'Scheduling recurring', done: 'Scheduled recurring' },
-  schedule_cron: { pending: 'Scheduling cron', done: 'Scheduled cron' },
-  list_reminders: { pending: 'Listing reminders', done: 'Listed reminders' },
-  cancel_reminder: { pending: 'Cancelling reminder', done: 'Cancelled reminder' },
+  schedule: { pending: 'Scheduling event', done: 'Scheduled event' },
+  list_schedule: { pending: 'Listing schedule', done: 'Listed schedule' },
+  update_schedule: { pending: 'Updating schedule', done: 'Updated schedule' },
+  cancel_schedule: { pending: 'Cancelling schedule', done: 'Cancelled schedule' },
   browser: { pending: 'Using browser', done: 'Used browser' },
   goals_view: { pending: 'Viewing goals', done: 'Viewed goals' },
   goals_add: { pending: 'Adding goal', done: 'Added goal' },
   goals_update: { pending: 'Updating goal', done: 'Updated goal' },
-  goals_propose: { pending: 'Proposing goals', done: 'Proposed goals' },
+  goals_delete: { pending: 'Deleting goal', done: 'Deleted goal' },
+  tasks_view: { pending: 'Viewing tasks', done: 'Viewed tasks' },
+  tasks_add: { pending: 'Adding task', done: 'Added task' },
+  tasks_update: { pending: 'Updating task', done: 'Updated task' },
+  tasks_done: { pending: 'Completing task', done: 'Completed task' },
+  tasks_delete: { pending: 'Deleting task', done: 'Deleted task' },
   research_view: { pending: 'Viewing research', done: 'Viewed research' },
   research_add: { pending: 'Adding research', done: 'Added research' },
   research_update: { pending: 'Updating research', done: 'Updated research' },
+  plan_view: { pending: 'Viewing plans', done: 'Viewed plans' },
+  plan_add: { pending: 'Creating plan', done: 'Created plan' },
+  plan_update: { pending: 'Updating plan', done: 'Updated plan' },
+  plan_start: { pending: 'Starting plan', done: 'Started plan' },
+  plan_delete: { pending: 'Deleting plan', done: 'Deleted plan' },
+  memory_search: { pending: 'Searching memory', done: 'Searched memory' },
+  memory_read: { pending: 'Reading memory', done: 'Read memory' },
 };
+
+function humanizeToolName(name: string): string {
+  return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
 
 function toolText(name: string, state: 'pending' | 'done'): string {
   const t = TOOL_TEXT[name];
-  return t ? t[state] : (state === 'pending' ? `Running ${name}` : `Ran ${name}`);
+  if (t) return t[state];
+  const h = humanizeToolName(name);
+  return state === 'pending' ? `Running ${h}` : `Completed ${h}`;
 }
 
 const TOOL_ICONS: Record<string, LucideIcon> = {
@@ -76,11 +93,16 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   WebFetch: Globe, WebSearch: Search, Task: Bot,
   AskUserQuestion: MessageCircle, TodoWrite: ListChecks, NotebookEdit: FileCode,
   message: MessageSquare, screenshot: Camera, browser: Monitor,
-  schedule_reminder: Clock, schedule_recurring: Clock,
-  schedule_cron: Clock, list_reminders: Clock, cancel_reminder: Clock,
+  schedule: Clock, list_schedule: Clock,
+  update_schedule: Clock, cancel_schedule: Clock,
   goals_view: LayoutGrid, goals_add: LayoutGrid,
-  goals_update: LayoutGrid, goals_propose: LayoutGrid,
+  goals_update: LayoutGrid, goals_delete: LayoutGrid,
+  tasks_view: ListChecks, tasks_add: ListChecks,
+  tasks_update: ListChecks, tasks_done: ListChecks, tasks_delete: ListChecks,
   research_view: FileSearch, research_add: FilePlus, research_update: Pencil,
+  plan_view: LayoutGrid, plan_add: LayoutGrid,
+  plan_update: LayoutGrid, plan_start: LayoutGrid, plan_delete: LayoutGrid,
+  memory_search: Search, memory_read: FileText,
 };
 
 const ANTHROPIC_MODELS = [
@@ -707,20 +729,14 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         />
       ) : null}
 
-      {/* approval cards */}
+      {/* approvals */}
       {sessionApprovals.length > 0 && (
-        <div className="px-4 pt-2 shrink-0 space-y-2">
-          {sessionApprovals.map(a => (
-            <ApprovalUI
-              key={a.requestId}
-              requestId={a.requestId}
-              toolName={a.toolName}
-              input={a.input}
-              timestamp={a.timestamp}
-              onApprove={gateway.approveToolUse}
-              onDeny={gateway.denyToolUse}
-            />
-          ))}
+        <div className="px-4 pt-2 shrink-0">
+          <ApprovalList
+            approvals={sessionApprovals}
+            onApprove={gateway.approveToolUse}
+            onDeny={gateway.denyToolUse}
+          />
         </div>
       )}
 

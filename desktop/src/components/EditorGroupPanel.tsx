@@ -123,7 +123,7 @@ export function EditorGroupPanel({
           />
         );
       case 'goals':
-        return <GoalsView gateway={gateway} onViewSession={onViewSession} />;
+        return <GoalsView gateway={gateway} onViewSession={onViewSession} onSetupChat={onSetupChat} />;
       case 'automation':
         return <Automations gateway={gateway} />;
       case 'research':

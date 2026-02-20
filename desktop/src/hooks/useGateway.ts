@@ -27,6 +27,8 @@ const TOOL_PENDING_TEXT: Record<string, string> = {
   screenshot: 'taking screenshot', browser: 'using browser',
   schedule: 'scheduling', list_schedule: 'listing schedule',
   update_schedule: 'updating schedule', cancel_schedule: 'cancelling schedule',
+  goals_view: 'viewing goals', goals_add: 'adding goal', goals_update: 'updating goal', goals_delete: 'deleting goal',
+  tasks_view: 'viewing tasks', tasks_add: 'adding task', tasks_update: 'updating task', tasks_done: 'completing task', tasks_delete: 'deleting task',
   research_view: 'viewing research', research_add: 'adding research', research_update: 'updating research',
 };
 
@@ -161,6 +163,7 @@ export type NotifiableEvent =
   | { type: 'tool_approval'; toolName: string }
   | { type: 'goals.update' }
   | { type: 'research.update' }
+  | { type: 'auth.required'; provider: string; reason: string }
   | { type: 'whatsapp.status'; status: string }
   | { type: 'telegram.status'; status: string }
   | { type: 'calendar'; summary: string };
@@ -188,7 +191,7 @@ export type CalendarRun = {
   seen?: boolean;
 };
 
-export type GoalExecution = {
+export type TaskRun = {
   sessionKey: string;
   status: 'started' | 'completed' | 'error';
   updatedAt: number;
@@ -202,6 +205,20 @@ export type GatewayTelemetry = {
   maxQueueDepth: number;
   bufferedAmountMax: number;
   disconnectReason?: string;
+};
+
+type ProviderAuthInfo = {
+  authenticated: boolean;
+  method?: string;
+  identity?: string;
+  error?: string;
+  model?: string;
+  cliVersion?: string;
+  permissionMode?: string;
+  storageBackend?: 'keychain' | 'file';
+  tokenHealth?: 'valid' | 'expiring' | 'expired';
+  nextRefreshAt?: number;
+  reconnectRequired?: boolean;
 };
 
 export type SessionState = {
@@ -437,9 +454,10 @@ export function useGateway(url = 'wss://localhost:18789') {
   const [telegramLinkStatus, setTelegramLinkStatus] = useState<string>('unknown');
   const [telegramBotUsername, setTelegramBotUsername] = useState<string | null>(null);
   const [telegramLinkError, setTelegramLinkError] = useState<string | null>(null);
-  const [providerInfo, setProviderInfo] = useState<{ name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } } | null>(null);
+  const [providerInfo, setProviderInfo] = useState<{ name: string; auth: ProviderAuthInfo } | null>(null);
   const [goalsVersion, setGoalsVersion] = useState(0);
-  const [goalExecutions, setGoalExecutions] = useState<Record<string, GoalExecution>>({});
+  const [taskRuns, setTaskRuns] = useState<Record<string, TaskRun>>({});
+  const [taskLogsVersion, setTaskLogsVersion] = useState(0);
   const [researchVersion, setResearchVersion] = useState(0);
   const [backgroundRuns, setBackgroundRuns] = useState<BackgroundRun[]>([]);
   const [calendarRuns, setCalendarRuns] = useState<CalendarRun[]>([]);
@@ -456,7 +474,7 @@ export function useGateway(url = 'wss://localhost:18789') {
 
   // Refs for event handler (doesn't close over state)
   const activeSessionKeyRef = useRef<string>('');
-  const currentChatIdRef = useRef<string>(`task-${Date.now()}`);
+  const currentChatIdRef = useRef<string>(crypto.randomUUID());
   const trackedSessionsRef = useRef<Set<string>>(new Set());
   const lastSeqRef = useRef<number>(0);
   const lastSeqBySessionRef = useRef<Map<string, number>>(new Map());
@@ -465,6 +483,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   const MAX_TRACKED_SEQS = 100000;
   // Callback ref for tab system to be notified of sessionId changes
   const onSessionIdChangeRef = useRef<((sessionKey: string, sessionId: string) => void) | null>(null);
+  const onFirstMessageRef = useRef<((sessionKey: string, preview: string) => void) | null>(null);
   const onNotifiableEventRef = useRef<((event: NotifiableEvent) => void) | null>(null);
 
   const markSeqIfNew = useCallback((seq: number, sessionKey?: string): boolean => {
@@ -645,7 +664,7 @@ export function useGateway(url = 'wss://localhost:18789') {
             const state = prev[sk];
             if (!state) return prev;
             const last = state.chatItems[state.chatItems.length - 1];
-            const isMarkedRunSource = d.source.startsWith('goals/') || d.source.startsWith('calendar/');
+            const isMarkedRunSource = d.source.startsWith('tasks/') || d.source.startsWith('calendar/');
             if (isMarkedRunSource && last?.type === 'user' && last.content === d.prompt) {
               return prev;
             }
@@ -1129,12 +1148,12 @@ export function useGateway(url = 'wss://localhost:18789') {
         break;
       }
 
-      case 'goals.execution': {
-        const d = data as { goalId: string; sessionKey: string; status: 'started' | 'completed' | 'error'; timestamp: number };
-        if (!d.goalId) break;
-        setGoalExecutions(prev => ({
+      case 'tasks.run': {
+        const d = data as { taskId: string; sessionKey: string; status: 'started' | 'completed' | 'error'; timestamp: number };
+        if (!d.taskId) break;
+        setTaskRuns(prev => ({
           ...prev,
-          [d.goalId]: {
+          [d.taskId]: {
             sessionKey: d.sessionKey,
             status: d.status,
             updatedAt: d.timestamp || Date.now(),
@@ -1143,9 +1162,27 @@ export function useGateway(url = 'wss://localhost:18789') {
         break;
       }
 
+      case 'tasks.log': {
+        setTaskLogsVersion(v => v + 1);
+        break;
+      }
+
       case 'research.update': {
         setResearchVersion(v => v + 1);
         onNotifiableEventRef.current?.({ type: 'research.update' });
+        break;
+      }
+
+      case 'provider.auth_required': {
+        const d = data as { provider: string; reason: string };
+        onNotifiableEventRef.current?.({
+          type: 'auth.required',
+          provider: d.provider || 'provider',
+          reason: d.reason || 'Authentication required',
+        });
+        gatewayClientRef.current.rpc('provider.get').then((res) => {
+          setProviderInfo(res as any);
+        }).catch(() => {});
         break;
       }
 
@@ -1220,7 +1257,7 @@ export function useGateway(url = 'wss://localhost:18789') {
       }
 
       case 'provider.auth_complete': {
-        const d = data as { provider: string; status: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } };
+        const d = data as { provider: string; status: ProviderAuthInfo };
         setProviderInfo(prev => prev ? { ...prev, auth: d.status } : { name: d.provider, auth: d.status });
         break;
       }
@@ -1286,7 +1323,7 @@ export function useGateway(url = 'wss://localhost:18789') {
       if (c.model) setModel(c.model as string);
     }).catch(() => {});
     rpc('provider.get').then((res) => {
-      const p = res as { name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } };
+      const p = res as { name: string; auth: ProviderAuthInfo };
       setProviderInfo(p);
     }).catch(() => {});
     rpc('sessions.list').then((res) => {
@@ -1318,6 +1355,10 @@ export function useGateway(url = 'wss://localhost:18789') {
     // Optimistic update: add user message and set status
     setSessionStates(prev => {
       const state = prev[sk] || { ...DEFAULT_SESSION_STATE };
+      const isFirst = !state.chatItems.some(i => i.type === 'user');
+      if (isFirst && onFirstMessageRef.current) {
+        onFirstMessageRef.current(sk, prompt.slice(0, 80));
+      }
       return {
         ...prev,
         [sk]: {
@@ -1328,7 +1369,7 @@ export function useGateway(url = 'wss://localhost:18789') {
       };
     });
     try {
-      const res = await rpc('chat.send', { prompt, chatId: cid }) as { sessionKey?: string } | undefined;
+      const res = await rpc('chat.send', { prompt, chatId: cid, sessionKey: sk }) as { sessionKey?: string } | undefined;
       if (res?.sessionKey && res.sessionKey !== sk) {
         // sessionKey changed (e.g. server normalized it) — migrate state
         activeSessionKeyRef.current = res.sessionKey;
@@ -1422,7 +1463,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   }, [rpc]);
 
   const newSession = useCallback(() => {
-    const newChatId = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const newChatId = crypto.randomUUID();
     const sk = `desktop:dm:${newChatId}`;
     currentChatIdRef.current = newChatId;
     activeSessionKeyRef.current = sk;
@@ -1564,20 +1605,20 @@ export function useGateway(url = 'wss://localhost:18789') {
 
   // provider helpers
   const getProviderStatus = useCallback(async () => {
-    const res = await rpc('provider.get') as { name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } };
+    const res = await rpc('provider.get') as { name: string; auth: ProviderAuthInfo };
     setProviderInfo(res);
     return res;
   }, [rpc]);
 
   const setProvider = useCallback(async (name: string) => {
     await rpc('provider.set', { name });
-    const res = await rpc('provider.get') as { name: string; auth: { authenticated: boolean; method?: string; identity?: string; error?: string; model?: string; cliVersion?: string; permissionMode?: string } };
+    const res = await rpc('provider.get') as { name: string; auth: ProviderAuthInfo };
     setProviderInfo(res);
     return res;
   }, [rpc]);
 
   const authWithApiKey = useCallback(async (provider: string, apiKey: string) => {
-    const res = await rpc('provider.auth.apiKey', { provider, apiKey }) as { authenticated: boolean; method?: string; error?: string };
+    const res = await rpc('provider.auth.apiKey', { provider, apiKey }) as ProviderAuthInfo;
     if (res.authenticated) {
       setProviderInfo(prev => prev ? { ...prev, auth: res } : { name: provider, auth: res });
     }
@@ -1589,7 +1630,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   }, [rpc]);
 
   const completeOAuth = useCallback(async (provider: string, loginId: string) => {
-    const res = await rpc('provider.auth.oauth.complete', { provider, loginId }) as { authenticated: boolean; method?: string; error?: string };
+    const res = await rpc('provider.auth.oauth.complete', { provider, loginId }) as ProviderAuthInfo;
     if (res.authenticated) {
       setProviderInfo(prev => prev ? { ...prev, auth: res } : { name: provider, auth: res });
     }
@@ -1601,7 +1642,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   }, [rpc]);
 
   const getProviderAuth = useCallback(async (provider: string) => {
-    return await rpc('provider.auth.status', { provider }) as { authenticated: boolean; method?: string; identity?: string; error?: string };
+    return await rpc('provider.auth.status', { provider }) as ProviderAuthInfo;
   }, [rpc]);
 
   const detectProviders = useCallback(async () => {
@@ -1689,6 +1730,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     setActiveSession,
     loadSessionIntoMap,
     onSessionIdChangeRef,
+    onFirstMessageRef,
     onNotifiableEventRef,
     // Global state
     channelMessages,
@@ -1743,7 +1785,8 @@ export function useGateway(url = 'wss://localhost:18789') {
     telegramUnlink,
     providerInfo,
     goalsVersion,
-    goalExecutions,
+    taskRuns,
+    taskLogsVersion,
     researchVersion,
     backgroundRuns,
     calendarRuns,

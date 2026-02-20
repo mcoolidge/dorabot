@@ -114,6 +114,7 @@ function computeNextRun(item: CalendarItem): Date | null {
 
 function computeNextRunWithTimezone(item: CalendarItem, now: Date): Date | null {
   const tz = item.timezone!;
+  const nowDt = DateTime.fromJSDate(now, { zone: tz });
 
   // parse dtstart in target timezone to get wall-clock base time
   const dtStart = DateTime.fromISO(item.dtstart, { zone: tz });
@@ -124,35 +125,73 @@ function computeNextRunWithTimezone(item: CalendarItem, now: Date): Date | null 
   const hours = Array.isArray(parsed.byhour) ? parsed.byhour : parsed.byhour != null ? [parsed.byhour] : [dtStart.hour];
   const minutes = Array.isArray(parsed.byminute) ? parsed.byminute : parsed.byminute != null ? [parsed.byminute] : [dtStart.minute];
 
-  // create rrule without BYHOUR/BYMINUTE (we'll apply those in target timezone)
+  // For sub-daily frequencies (MINUTELY, HOURLY), use RRule directly in UTC
+  // since BYHOUR/BYMINUTE are stripped and interval-based recurrence doesn't need them
+  const freq = parsed.freq;
+  const isSubDaily = freq === RRule.MINUTELY || freq === RRule.HOURLY || freq === RRule.SECONDLY;
+
+  if (isSubDaily) {
+    // Simple approach: compute from dtstart using the interval
+    const intervalMs = getIntervalMs(parsed);
+    if (intervalMs && intervalMs > 0) {
+      const startMs = dtStart.toMillis();
+      const nowMs = now.getTime();
+      if (nowMs < startMs) return dtStart.toJSDate();
+      const elapsed = nowMs - startMs;
+      const periods = Math.floor(elapsed / intervalMs);
+      const nextMs = startMs + (periods + 1) * intervalMs;
+      return new Date(nextMs);
+    }
+    return null;
+  }
+
+  // For daily+ frequencies: generate candidate dates, apply BYHOUR/BYMINUTE in wall-clock time.
+  // Build RRule without BYHOUR/BYMINUTE, use a "fake UTC" dtstart that matches
+  // the wall-clock midnight so RRule generates dates on the right calendar days.
   const ruleOpts = { ...parsed };
   delete ruleOpts.byhour;
   delete ruleOpts.byminute;
 
-  // use dtstart as-is but strip time (we'll add it back per timezone)
-  const baseDate = dtStart.startOf('day').toJSDate();
+  // Create a fake UTC date matching wall-clock midnight in target timezone.
+  // This ensures RRule generates candidates on the correct calendar days.
+  const wallMidnight = dtStart.startOf('day');
+  const fakeUtcDtstart = new Date(Date.UTC(
+    wallMidnight.year, wallMidnight.month - 1, wallMidnight.day, 0, 0, 0
+  ));
+
   const rule = new RRule({
-    dtstart: baseDate,
+    dtstart: fakeUtcDtstart,
     ...ruleOpts,
   });
 
-  // generate up to 100 candidate dates
-  const nowDt = DateTime.now().setZone(tz);
-  const candidates = rule.between(
-    dtStart.toJSDate(),
-    nowDt.plus({ years: 1 }).toJSDate(),
-    true
-  );
+  // Search window: from yesterday (to catch today's remaining slots) to 1 year out
+  const searchStart = new Date(Date.UTC(
+    nowDt.year, nowDt.month - 1, nowDt.day - 1, 0, 0, 0
+  ));
+  const searchEnd = new Date(Date.UTC(
+    nowDt.year + 1, nowDt.month - 1, nowDt.day, 0, 0, 0
+  ));
 
-  // for each candidate date, try all hour/minute combinations
+  const candidates = rule.between(searchStart, searchEnd, true);
+
+  // Sort hours and minutes so we return the earliest match
+  const sortedHours = [...hours].sort((a, b) => a - b);
+  const sortedMinutes = [...minutes].sort((a, b) => a - b);
+
+  // For each candidate date, try all hour/minute combinations in wall-clock time
   for (const candidate of candidates) {
-    const candidateDt = DateTime.fromJSDate(candidate, { zone: tz });
+    // Extract the calendar date from the fake-UTC candidate
+    const year = candidate.getUTCFullYear();
+    const month = candidate.getUTCMonth() + 1; // Luxon months are 1-based
+    const day = candidate.getUTCDate();
 
-    for (const hour of hours) {
-      for (const minute of minutes) {
-        const wallClock = candidateDt.set({ hour, minute, second: 0, millisecond: 0 });
+    for (const hour of sortedHours) {
+      for (const minute of sortedMinutes) {
+        const wallClock = DateTime.fromObject(
+          { year, month, day, hour, minute, second: 0, millisecond: 0 },
+          { zone: tz }
+        );
 
-        // convert to UTC and check if it's after now
         if (wallClock.toJSDate() > now) {
           return wallClock.toJSDate();
         }
@@ -161,6 +200,16 @@ function computeNextRunWithTimezone(item: CalendarItem, now: Date): Date | null 
   }
 
   return null;
+}
+
+function getIntervalMs(parsed: Partial<rrule.Options>): number | null {
+  const interval = parsed.interval || 1;
+  switch (parsed.freq) {
+    case RRule.SECONDLY: return interval * 1000;
+    case RRule.MINUTELY: return interval * 60_000;
+    case RRule.HOURLY: return interval * 3_600_000;
+    default: return null;
+  }
 }
 
 // parse RRULE string into options object for RRule constructor

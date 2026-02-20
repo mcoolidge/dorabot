@@ -26,15 +26,29 @@ import { validateTelegramToken } from '../channels/telegram/bot.js';
 import { insertEvent, queryEventsBySessionCursor, deleteEventsUpToSeq, cleanupOldEvents } from './event-log.js';
 import { getChannelHandler } from '../tools/messaging.js';
 import { setScheduler } from '../tools/index.js';
-import { loadGoals, saveGoals, type GoalTask } from '../tools/goals.js';
+import { loadPlans, savePlans, type Plan, appendPlanLog, readPlanLogs, readPlanDoc, createPlanFromIdea } from '../tools/plans.js';
+import { loadIdeas, saveIdeas } from '../ideas/tools.js';
+import { loadGoals, saveGoals, type Goal } from '../tools/goals.js';
+import {
+  loadTasks,
+  saveTasks,
+  type Task,
+  appendTaskLog,
+  readTaskLogs,
+  ensureTaskPlanDoc,
+  readTaskPlanDoc,
+  writeTaskPlanDoc,
+  getTaskPlanPath,
+} from '../tools/tasks.js';
 import { loadResearch, saveResearch, readResearchContent, type ResearchItem } from '../tools/research.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
-import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, getActiveAuthMethod, isOAuthTokenExpired } from '../providers/claude.js';
-import { isCodexInstalled, hasCodexAuth } from '../providers/codex.js';
+import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, getActiveAuthMethod, isOAuthTokenExpired, onClaudeAuthRequired } from '../providers/claude.js';
+import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired } from '../providers/codex.js';
 import type { ProviderName } from '../config.js';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { classifyToolCall, cleanToolName, isToolAllowed, type Tier } from './tool-policy.js';
 import { AUTONOMOUS_SCHEDULE_ID, buildAutonomousCalendarItem, PULSE_INTERVALS, DEFAULT_PULSE_INTERVAL, pulseIntervalToRrule, rruleToPulseInterval } from '../autonomous.js';
+import { ensureWorktreeForPlan, getWorktreeStats, mergeWorktreeBranch, pushWorktreePr, removeWorktree } from '../worktree/manager.js';
 import {
   DORABOT_DIR,
   GATEWAY_TOKEN_PATH,
@@ -72,7 +86,11 @@ const TOOL_EMOJI: Record<string, string> = {
   screenshot: '📸', browser: '🌐',
   schedule: '⏰', list_schedule: '⏰',
   update_schedule: '⏰', cancel_schedule: '⏰',
-  goals_view: '🎯', goals_add: '🎯', goals_update: '🎯', goals_propose: '🎯',
+  goals_view: '🎯', goals_add: '🎯', goals_update: '🎯', goals_delete: '🎯',
+  tasks_view: '✅', tasks_add: '✅', tasks_update: '✅', tasks_done: '✅', tasks_delete: '✅',
+  plan_view: '🎯', plan_add: '🎯', plan_update: '🎯', plan_start: '🎯',
+  plan_delete: '🎯',
+  ideas_view: '💡', ideas_add: '💡', ideas_update: '💡', ideas_delete: '💡', ideas_create_plan: '💡',
 };
 
 const TOOL_LABEL: Record<string, string> = {
@@ -84,7 +102,10 @@ const TOOL_LABEL: Record<string, string> = {
   screenshot: 'Took screenshot', browser: 'Browsed',
   schedule: 'Scheduled', list_schedule: 'Listed schedule',
   update_schedule: 'Updated schedule', cancel_schedule: 'Cancelled schedule',
-  goals_view: 'Checked goals', goals_add: 'Added goal', goals_update: 'Updated goal', goals_propose: 'Proposed goal',
+  goals_view: 'Checked goals', goals_add: 'Added goal', goals_update: 'Updated goal', goals_delete: 'Deleted goal',
+  tasks_view: 'Checked tasks', tasks_add: 'Added task', tasks_update: 'Updated task', tasks_done: 'Completed task', tasks_delete: 'Deleted task',
+  plan_view: 'Checked plans', plan_add: 'Added plan', plan_update: 'Updated plan', plan_start: 'Started plan', plan_delete: 'Deleted plan',
+  ideas_view: 'Checked ideas', ideas_add: 'Added idea', ideas_update: 'Updated idea', ideas_delete: 'Deleted idea', ideas_create_plan: 'Created plan from idea',
 };
 
 const TOOL_ACTIVE_LABEL: Record<string, string> = {
@@ -96,7 +117,10 @@ const TOOL_ACTIVE_LABEL: Record<string, string> = {
   screenshot: 'Taking screenshot', browser: 'Browsing',
   schedule: 'Scheduling', list_schedule: 'Listing schedule',
   update_schedule: 'Updating schedule', cancel_schedule: 'Cancelling schedule',
-  goals_view: 'Checking goals', goals_add: 'Adding goal', goals_update: 'Updating goal', goals_propose: 'Proposing goal',
+  goals_view: 'Checking goals', goals_add: 'Adding goal', goals_update: 'Updating goal', goals_delete: 'Deleting goal',
+  tasks_view: 'Checking tasks', tasks_add: 'Adding task', tasks_update: 'Updating task', tasks_done: 'Completing task', tasks_delete: 'Deleting task',
+  plan_view: 'Checking plans', plan_add: 'Adding plan', plan_update: 'Updating plan', plan_start: 'Starting plan', plan_delete: 'Deleting plan',
+  ideas_view: 'Checking ideas', ideas_add: 'Adding idea', ideas_update: 'Updating idea', ideas_delete: 'Deleting idea', ideas_create_plan: 'Creating plan from idea',
 };
 
 // Plural labels when multiple consecutive same-tool calls are grouped
@@ -375,6 +399,19 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     });
   }
 
+  const unsubscribeClaudeAuthRequired = onClaudeAuthRequired((reason) => {
+    broadcast({
+      event: 'provider.auth_required',
+      data: { provider: 'claude', reason, timestamp: Date.now() },
+    });
+  });
+  const unsubscribeCodexAuthRequired = onCodexAuthRequired((reason) => {
+    broadcast({
+      event: 'provider.auth_required',
+      data: { provider: 'codex', reason, timestamp: Date.now() },
+    });
+  });
+
   // file system watcher manager
   type FileWatchEntry = {
     watcher: FSWatcher;
@@ -485,6 +522,21 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       writeFile(ownerChatIdsFile, JSON.stringify(obj, null, 2)).catch(() => {});
     }, 1000);
   }
+
+  async function sendTelegramOwnerStatus(message: string): Promise<void> {
+    const chatId = ownerChatIds.get('telegram');
+    if (!chatId) return;
+    const telegram = getAllChannelStatuses().find(s => s.channel === 'telegram');
+    if (!telegram?.connected) return;
+    const handler = getChannelHandler('telegram');
+    if (!handler) return;
+    try {
+      await handler.send(chatId, message);
+    } catch (err) {
+      console.error('[gateway] failed to send telegram status:', err);
+    }
+  }
+
   // queued messages for sessions with active runs
   const pendingMessages = new Map<string, InboundMessage[]>();
   // accumulated tool log per active run
@@ -512,8 +564,10 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const channelQuestionRefs = new Map<string, ChannelQuestionRef>();
   const MAX_CHANNEL_QUESTION_REFS = 2000;
   const QUESTION_LINK_WINDOW_MS = 45 * 60 * 1000;
-  const activeGoalRuns = new Map<string, { sessionKey: string; startedAt: number }>();
-  const goalRunBySession = new Map<string, string>();
+  const activePlanRuns = new Map<string, { sessionKey: string; startedAt: number }>();
+  const planRunBySession = new Map<string, string>();
+  const activeTaskRuns = new Map<string, { sessionKey: string; startedAt: number }>();
+  const taskRunBySession = new Map<string, string>();
   const runEventPruneTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const RUN_EVENT_PRUNE_GRACE_MS = 10 * 60 * 1000;
   // keep replay data for an extended window across crashes; normal pruning is run-end based.
@@ -577,64 +631,187 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   }
 
   function isMarkedRunSource(source: string): boolean {
-    return source === `calendar/${AUTONOMOUS_SCHEDULE_ID}` || source.startsWith('goals/');
+    return source === `calendar/${AUTONOMOUS_SCHEDULE_ID}` || source.startsWith('plans/') || source.startsWith('tasks/');
   }
 
-  function extractGoalIdFromSource(source: string): string | null {
-    const m = source.match(/^goals\/([^/]+)$/);
+  function extractPlanIdFromSource(source: string): string | null {
+    const m = source.match(/^plans\/([^/]+)$/);
     return m ? m[1] : null;
   }
 
-  function buildGoalExecutionPrompt(task: GoalTask): string {
+  function extractTaskIdFromSource(source: string): string | null {
+    const m = source.match(/^tasks\/([^/]+)$/);
+    return m ? m[1] : null;
+  }
+
+  function buildPlanExecutionPrompt(task: Plan, ideaContext?: string, planDoc?: string): string {
     const tagLine = task.tags?.length ? `Tags: ${task.tags.join(', ')}` : '';
-    const descriptionLine = task.description ? `Description:\n${task.description}` : 'Description:\n(No extra description provided)';
+    const descriptionLine = task.description ? `Description:\n${task.description}` : '';
+    const ideaLine = ideaContext ? `Idea context:\n${ideaContext}` : '';
+    const planDocLine = planDoc ? `plan.md:\n${planDoc}` : '';
 
     return [
-      `Execute goal #${task.id}: ${task.title}`,
+      `Execute plan #${task.id}: ${task.title}`,
       '',
       descriptionLine,
+      ideaLine,
+      planDocLine,
       tagLine,
       '',
-      'Execution protocol:',
-      '- Push this goal as far as possible toward completion in this run.',
-      '- Default to concrete action, not planning-only responses.',
-      '- Keep the goal state accurate with goals_update (status/result/progress).',
-      '- If blocked by missing user input, ask AskUserQuestion with specific options.',
-      '- If AskUserQuestion times out: message the user on an available channel, sleep 120 seconds, ask once more, then continue with the best defensible assumption and document that assumption in the goal result.',
-      '- For proposed goals: research-only. For approved/in_progress goals: execute aggressively.',
-      '',
-      'Done criteria:',
-      '- Mark done only when objective is achieved.',
-      '- If not done, leave clear progress notes and the next concrete step in result.',
+      'Push this plan toward completion. Default to action, not narration.',
+      'Keep plan state current with plan_update as you work.',
+      'If blocked, ask the user. If no response, make a reasonable call and document it.',
+      'Mark done only when the objective is actually met. Otherwise leave progress notes and next steps.',
     ].filter(Boolean).join('\n');
   }
 
-  function markGoalRunStarted(goalId: string, sessionKey: string): void {
-    activeGoalRuns.set(goalId, { sessionKey, startedAt: Date.now() });
-    goalRunBySession.set(sessionKey, goalId);
+  function buildTaskExecutionPrompt(task: Task, goal?: Goal, mode: 'plan' | 'execute' = 'execute'): string {
+    const goalLine = goal ? `Goal:\n#${goal.id} [${goal.status}] ${goal.title}\n${goal.description || ''}` : '';
+    const planContent = readTaskPlanDoc(task);
+    const planLine = planContent ? `Plan:\n${planContent}` : '';
+    const reasonLine = task.reason ? `Reason:\n${task.reason}` : '';
+
+    if (mode === 'plan') {
+      return [
+        `Plan task #${task.id}: ${task.title}`,
+        '',
+        goalLine,
+        planLine,
+        reasonLine,
+        '',
+        'Research and write a detailed execution plan for this task.',
+        'Write the plan to the task PLAN.md using tasks_update with the plan param.',
+        'Include: objective, steps, risks, validation criteria.',
+        'Do NOT execute the task — only plan.',
+        'When the plan is complete, set status to planned with tasks_update.',
+      ].filter(Boolean).join('\n');
+    }
+
+    return [
+      `Execute task #${task.id}: ${task.title}`,
+      '',
+      goalLine,
+      planLine,
+      reasonLine,
+      '',
+      'Do concrete work, not status narration.',
+      'Keep task state current with tasks_update as you work.',
+      'If blocked, set status=blocked and include a clear reason.',
+      'Mark done only when the task objective is met.',
+    ].filter(Boolean).join('\n');
+  }
+
+  function markPlanRunStarted(planId: string, sessionKey: string): void {
+    activePlanRuns.set(planId, { sessionKey, startedAt: Date.now() });
+    planRunBySession.set(sessionKey, planId);
     broadcast({
-      event: 'goals.execution',
-      data: { goalId, sessionKey, status: 'started', timestamp: Date.now() },
+      event: 'plans.run',
+      data: { planId, sessionKey, status: 'started', timestamp: Date.now() },
     });
   }
 
-  function finishGoalRun(sessionKey: string, status: 'completed' | 'error', error?: string): void {
-    const goalId = goalRunBySession.get(sessionKey);
-    if (!goalId) return;
-    const current = activeGoalRuns.get(goalId);
-    if (current?.sessionKey === sessionKey) activeGoalRuns.delete(goalId);
-    goalRunBySession.delete(sessionKey);
+  function finishPlanRun(sessionKey: string, status: 'completed' | 'error', error?: string): void {
+    const planId = planRunBySession.get(sessionKey);
+    if (!planId) return;
+    const current = activePlanRuns.get(planId);
+    if (current?.sessionKey === sessionKey) activePlanRuns.delete(planId);
+    planRunBySession.delete(sessionKey);
+
+    const plans = loadPlans();
+    const plan = plans.tasks.find(p => p.id === planId);
+    if (plan) {
+      plan.runState = status === 'completed' ? 'idle' : 'failed';
+      plan.error = status === 'error' ? (error || 'Plan run failed') : undefined;
+      plan.updatedAt = new Date().toISOString();
+      if (status === 'completed') {
+        plan.status = 'done';
+        plan.completedAt = plan.updatedAt;
+      }
+      savePlans(plans);
+      appendPlanLog(plan.id, status === 'completed' ? 'run_completed' : 'run_error', status === 'completed' ? 'Plan run completed' : (error || 'Plan run failed'));
+      broadcast({ event: 'plans.update', data: { planId: plan.id, plan } });
+      broadcast({
+        event: 'plans.log',
+        data: {
+          planId: plan.id,
+          eventType: status === 'completed' ? 'run_completed' : 'run_error',
+          message: status === 'completed' ? 'Plan run completed' : (error || 'Plan run failed'),
+          timestamp: Date.now(),
+        },
+      });
+    }
+
     broadcast({
-      event: 'goals.execution',
-      data: { goalId, sessionKey, status, timestamp: Date.now(), ...(error ? { error } : {}) },
+      event: 'plans.run',
+      data: { planId, sessionKey, status, timestamp: Date.now(), ...(error ? { error } : {}) },
     });
   }
 
-  function maybeMarkGoalRunFromSource(source: string, sessionKey: string): void {
-    const goalId = extractGoalIdFromSource(source);
-    if (!goalId) return;
-    if (goalRunBySession.get(sessionKey) === goalId) return;
-    markGoalRunStarted(goalId, sessionKey);
+  function maybeMarkPlanRunFromSource(source: string, sessionKey: string): void {
+    const planId = extractPlanIdFromSource(source);
+    if (!planId) return;
+    if (planRunBySession.get(sessionKey) === planId) return;
+    markPlanRunStarted(planId, sessionKey);
+  }
+
+  function markTaskRunStarted(taskId: string, sessionKey: string): void {
+    activeTaskRuns.set(taskId, { sessionKey, startedAt: Date.now() });
+    taskRunBySession.set(sessionKey, taskId);
+    broadcast({
+      event: 'tasks.run',
+      data: { taskId, sessionKey, status: 'started', timestamp: Date.now() },
+    });
+  }
+
+  function finishTaskRun(sessionKey: string, status: 'completed' | 'error', error?: string): void {
+    const taskId = taskRunBySession.get(sessionKey);
+    if (!taskId) return;
+    const current = activeTaskRuns.get(taskId);
+    if (current?.sessionKey === sessionKey) activeTaskRuns.delete(taskId);
+    taskRunBySession.delete(sessionKey);
+
+    const tasks = loadTasks();
+    const task = tasks.tasks.find(t => t.id === taskId);
+    if (task) {
+      task.updatedAt = new Date().toISOString();
+      if (status === 'completed') {
+        task.status = 'done';
+        task.completedAt = task.updatedAt;
+        task.reason = undefined;
+      } else {
+        task.status = 'blocked';
+        task.reason = error || 'Task run failed';
+      }
+      saveTasks(tasks);
+      appendTaskLog(task.id, status === 'completed' ? 'run_completed' : 'run_error', status === 'completed' ? 'Task run completed' : (error || 'Task run failed'));
+      broadcast({ event: 'goals.update', data: { taskId: task.id, task } });
+      broadcast({
+        event: 'tasks.log',
+        data: {
+          taskId: task.id,
+          eventType: status === 'completed' ? 'run_completed' : 'run_error',
+          message: status === 'completed' ? 'Task run completed' : (error || 'Task run failed'),
+          timestamp: Date.now(),
+        },
+      });
+      if (status === 'completed') {
+        void sendTelegramOwnerStatus(`✅ Task #${task.id} completed: ${task.title}`);
+      } else {
+        void sendTelegramOwnerStatus(`⚠️ Task #${task.id} failed: ${task.title}\nReason: ${task.reason || error || 'unknown error'}`);
+      }
+    }
+
+    broadcast({
+      event: 'tasks.run',
+      data: { taskId, sessionKey, status, timestamp: Date.now(), ...(error ? { error } : {}) },
+    });
+  }
+
+  function maybeMarkTaskRunFromSource(source: string, sessionKey: string): void {
+    const taskId = extractTaskIdFromSource(source);
+    if (!taskId) return;
+    if (taskRunBySession.get(sessionKey) === taskId) return;
+    markTaskRunStarted(taskId, sessionKey);
   }
 
   function extractRunSessionId(text?: string): string | undefined {
@@ -1188,6 +1365,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       }
     },
     onApprovalResponse: (requestId, approved, reason) => {
+      const pendingTask = pendingTaskApprovals.get(requestId);
+      if (pendingTask) {
+        pendingTaskApprovals.delete(requestId);
+        void handleTaskApprovalDecision(pendingTask.taskId, requestId, approved, reason);
+        return;
+      }
       const pending = pendingApprovals.get(requestId);
       if (!pending) return;
       pendingApprovals.delete(requestId);
@@ -1484,6 +1667,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     timeout: NodeJS.Timeout | null;
   }>();
 
+  const pendingTaskApprovals = new Map<string, {
+    taskId: string;
+    requestedAt: number;
+  }>();
+
   async function waitForApproval(requestId: string, toolName: string, input: Record<string, unknown>, timeoutMs?: number, sessionKey?: string): Promise<{ approved: boolean; reason?: string; modifiedInput?: Record<string, unknown> }> {
     // persist to snapshot
     if (sessionKey) {
@@ -1502,6 +1690,180 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       if (sessionKey) { const snap = sessionSnapshots.get(sessionKey); if (snap) snap.pendingApproval = null; }
       return decision;
     }) as Promise<{ approved: boolean; reason?: string; modifiedInput?: Record<string, unknown> }>;
+  }
+
+  async function startTaskExecution(taskId: string, mode: 'plan' | 'execute' = 'execute'): Promise<{
+    started: boolean;
+    taskId: string;
+    sessionKey: string;
+    sessionId: string;
+    chatId: string;
+  }> {
+    const tasks = loadTasks();
+    const task = tasks.tasks.find(t => t.id === taskId);
+    if (!task) throw new Error('task not found');
+    if (task.status === 'done') throw new Error('task is already done');
+    if (task.status === 'cancelled') throw new Error('task is cancelled');
+
+    const existing = activeTaskRuns.get(taskId);
+    if (existing) {
+      const active = sessionRegistry.get(existing.sessionKey)?.activeRun || false;
+      if (active) throw new Error('task execution already running');
+      activeTaskRuns.delete(taskId);
+      if (taskRunBySession.get(existing.sessionKey) === taskId) {
+        taskRunBySession.delete(existing.sessionKey);
+      }
+    }
+
+    const chatId = randomUUID();
+    const session = sessionRegistry.getOrCreate({
+      channel: 'desktop',
+      chatType: 'dm',
+      chatId,
+    });
+    const sessionKey = session.key;
+    sessionRegistry.incrementMessages(session.key);
+    fileSessionManager.setMetadata(session.sessionId, { channel: 'desktop', chatId, chatType: 'dm' });
+    broadcastSessionUpdate(session.key);
+
+    const now = new Date().toISOString();
+    ensureTaskPlanDoc(task, task.plan);
+    task.plan = readTaskPlanDoc(task);
+    task.status = 'in_progress';
+    task.reason = undefined;
+    task.approvalRequestId = undefined;
+    task.sessionKey = sessionKey;
+    task.sessionId = session.sessionId;
+    task.updatedAt = now;
+    saveTasks(tasks);
+
+    const goals = loadGoals();
+    const goal = task.goalId ? goals.goals.find(g => g.id === task.goalId) : undefined;
+    const prompt = buildTaskExecutionPrompt(task, goal, mode);
+
+    appendTaskLog(task.id, 'run_started', `Task ${mode === 'plan' ? 'planning' : 'started'}: ${task.title}`, { sessionKey, mode });
+    broadcast({ event: 'goals.update', data: { taskId: task.id, task } });
+    broadcast({
+      event: 'tasks.log',
+      data: { taskId: task.id, eventType: 'run_started', message: `Task started: ${task.title}`, timestamp: Date.now() },
+    });
+    markTaskRunStarted(taskId, sessionKey);
+    macNotify('Dora', `Task started: ${task.title}`);
+    void sendTelegramOwnerStatus(`▶️ Task #${task.id} started: ${task.title}`);
+
+    void handleAgentRun({
+      prompt,
+      sessionKey,
+      source: `tasks/${taskId}`,
+      cwd: config.cwd,
+      messageMetadata: {
+        channel: 'desktop',
+        chatId,
+        chatType: 'dm',
+        body: prompt,
+      },
+    }).then((res) => {
+      if (!res) finishTaskRun(sessionKey, 'error', 'task execution did not start');
+    }).catch((err) => {
+      finishTaskRun(sessionKey, 'error', err instanceof Error ? err.message : String(err));
+    });
+
+    return {
+      started: true,
+      taskId,
+      sessionKey,
+      sessionId: session.sessionId,
+      chatId,
+    };
+  }
+
+  async function handleTaskApprovalDecision(taskId: string, requestId: string, approved: boolean, reason?: string, mode: 'plan' | 'execute' = 'execute'): Promise<{
+    started: boolean;
+    taskId: string;
+    sessionKey: string;
+    sessionId: string;
+    chatId: string;
+  } | null> {
+    const tasks = loadTasks();
+    const task = tasks.tasks.find(t => t.id === taskId);
+    if (!task) return null;
+    if (task.approvalRequestId && task.approvalRequestId !== requestId) return null;
+
+    if (!approved) {
+      task.status = 'planned';
+      task.reason = reason || 'approval denied';
+      task.updatedAt = new Date().toISOString();
+      task.approvalRequestId = undefined;
+      saveTasks(tasks);
+      appendTaskLog(task.id, 'approval_denied', task.reason);
+      broadcast({ event: 'goals.update', data: { taskId: task.id, task } });
+      macNotify('Dora', `Task denied: ${task.title}`);
+      void sendTelegramOwnerStatus(`❌ Task #${task.id} not approved: ${task.title}\nReason: ${task.reason}`);
+      return null;
+    }
+
+    task.approvedAt = new Date().toISOString();
+    task.reason = undefined;
+    task.updatedAt = task.approvedAt;
+    task.approvalRequestId = undefined;
+    saveTasks(tasks);
+    appendTaskLog(task.id, 'approved', 'Task approved');
+    broadcast({ event: 'goals.update', data: { taskId: task.id, task } });
+    void sendTelegramOwnerStatus(`✅ Task #${task.id} approved: ${task.title}`);
+    try {
+      return await startTaskExecution(task.id, mode);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      appendTaskLog(task.id, 'run_error', errMsg);
+      macNotify('Dora', `Task start failed: ${task.title}`);
+      return null;
+    }
+  }
+
+  async function requestTaskApproval(taskId: string, targetChannel?: string, targetChatId?: string, sessionKey?: string): Promise<void> {
+    const tasks = loadTasks();
+    const task = tasks.tasks.find(t => t.id === taskId);
+    if (!task) return;
+    if (task.status !== 'planned') return;
+    if (task.approvalRequestId) return;
+
+    const requestId = randomUUID();
+    task.approvalRequestId = requestId;
+    task.updatedAt = new Date().toISOString();
+    saveTasks(tasks);
+    appendTaskLog(task.id, 'approval_requested', 'Waiting for human approval');
+    broadcast({ event: 'goals.update', data: { taskId: task.id, task } });
+
+    const input = {
+      taskId: task.id,
+      goalId: task.goalId,
+      title: task.title,
+      plan: readTaskPlanDoc(task) || task.plan || '',
+    };
+
+    pendingTaskApprovals.set(requestId, { taskId: task.id, requestedAt: Date.now() });
+    broadcast({
+      event: 'agent.tool_approval',
+      data: {
+        requestId,
+        toolName: 'task_start',
+        input,
+        tier: 'require-approval',
+        sessionKey,
+        timestamp: Date.now(),
+      },
+    });
+    channelManager.sendApprovalRequest({ requestId, toolName: 'task_start', input, chatId: targetChatId }, targetChannel).catch(() => {});
+    macNotify('Dora', `Approval needed: ${task.title}`);
+    void sendTelegramOwnerStatus(`🛡️ Task #${task.id} awaiting approval: ${task.title}`);
+  }
+
+  async function requestPendingTaskApprovals(targetChannel?: string, targetChatId?: string, sessionKey?: string): Promise<void> {
+    const tasks = loadTasks();
+    const pending = tasks.tasks.filter(task => task.status === 'planned' && !task.approvalRequestId);
+    for (const task of pending) {
+      await requestTaskApproval(task.id, targetChannel, targetChatId, sessionKey);
+    }
   }
 
   function getChannelToolPolicy(channel?: string): ToolPolicyConfig | undefined {
@@ -1741,10 +2103,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     sessionKey: string;
     source: string;
     channel?: string;
+    cwd?: string;
     extraContext?: string;
     messageMetadata?: import('../session/manager.js').MessageMetadata;
   }): Promise<AgentResult | null> {
-    const { prompt, sessionKey, source, channel, extraContext, messageMetadata } = params;
+    const { prompt, sessionKey, source, channel, cwd, extraContext, messageMetadata } = params;
     console.log(`[gateway] agent run: source=${source} sessionKey=${sessionKey} prompt="${prompt.slice(0, 80)}..."`);
 
     // pre-run auth check: if dorabot_oauth token is expired, don't waste a run
@@ -1767,7 +2130,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
     const run = prev.then(async () => {
       console.log(`[handleAgentRun] prev resolved, starting run for ${sessionKey}`);
-      maybeMarkGoalRunFromSource(source, sessionKey);
+      maybeMarkPlanRunFromSource(source, sessionKey);
+      maybeMarkTaskRunFromSource(source, sessionKey);
       sessionRegistry.setActiveRun(sessionKey, true);
       if (channel) activeRunChannels.set(sessionKey, channel);
       activeRunSources.set(sessionKey, source);
@@ -1802,6 +2166,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           sessionId: session?.sessionId,
           resumeId,
           config,
+          cwd,
           channel,
           connectedChannels: connected,
           timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -1825,13 +2190,66 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
         const maybeRegisterRunRefFromToolResult = (toolUseId: string, toolResultText: string) => {
           const meta = toolUseMeta.get(toolUseId);
-          if (!meta || meta.name !== 'message') return;
-          const sentId = toolResultText.match(/Message sent\. ID:\s*([^\s]+)/)?.[1];
-          const targetChannel = typeof meta.input.channel === 'string' ? meta.input.channel : channel;
-          const targetChatId = typeof meta.input.target === 'string' ? meta.input.target : undefined;
-          const outboundText = typeof meta.input.message === 'string' ? meta.input.message : '';
-          if (!sentId || !targetChannel || !targetChatId) return;
-          registerRunReplyRef(source, sessionKey, targetChannel, targetChatId, sentId, outboundText);
+          if (!meta) return;
+
+          if (meta.name === 'message') {
+            const sentId = toolResultText.match(/Message sent\. ID:\s*([^\s]+)/)?.[1];
+            const targetChannel = typeof meta.input.channel === 'string' ? meta.input.channel : channel;
+            const targetChatId = typeof meta.input.target === 'string' ? meta.input.target : undefined;
+            const outboundText = typeof meta.input.message === 'string' ? meta.input.message : '';
+            if (!sentId || !targetChannel || !targetChatId) return;
+            registerRunReplyRef(source, sessionKey, targetChannel, targetChatId, sentId, outboundText);
+            return;
+          }
+
+          if (meta.name === 'plan_update' || meta.name === 'plan_start') {
+            const planId = typeof meta.input.id === 'string'
+              ? meta.input.id
+              : typeof meta.input.planId === 'string'
+                ? meta.input.planId
+                : undefined;
+            if (!planId) return;
+            broadcast({
+              event: 'plans.log',
+              data: {
+                planId,
+                eventType: meta.name,
+                message: toolResultText.slice(0, 500),
+                timestamp: Date.now(),
+              },
+            });
+            broadcast({ event: 'plans.update', data: { planId } });
+          }
+
+          if (meta.name === 'tasks_update' || meta.name === 'tasks_done' || meta.name === 'tasks_add' || meta.name === 'tasks_delete') {
+            let taskId = typeof meta.input.id === 'string'
+              ? meta.input.id
+              : typeof meta.input.taskId === 'string'
+                ? meta.input.taskId
+                : undefined;
+            if (!taskId) {
+              const parsed = toolResultText.match(/Task #(\d+)/);
+              taskId = parsed?.[1];
+            }
+            if (!taskId) return;
+            broadcast({
+              event: 'tasks.log',
+              data: {
+                taskId,
+                eventType: meta.name,
+                message: toolResultText.slice(0, 500),
+                timestamp: Date.now(),
+              },
+            });
+            broadcast({ event: 'goals.update', data: { taskId } });
+          }
+
+          if (meta.name === 'goals_add' || meta.name === 'goals_update' || meta.name === 'goals_delete') {
+            const goalId = typeof meta.input.id === 'string'
+              ? meta.input.id
+              : toolResultText.match(/Goal #(\d+)/)?.[1];
+            broadcast({ event: 'goals.update', data: { goalId: goalId || undefined } });
+          }
         };
 
         for await (const msg of gen) {
@@ -2166,18 +2584,33 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               scheduleRunEventPrune(sessionKey, resultEvent.seq);
             }
 
-            // per-turn: broadcast goals.update if agent used goals tools
+            // per-turn: broadcast goals/tasks updates if agent used planning tools
             const tl = toolLogs.get(sessionKey);
             if (tl) {
               const allTools = [...tl.completed.map(t => t.name), tl.current?.name].filter(Boolean);
-              if (allTools.some(t => t?.startsWith('goals_') || t?.startsWith('mcp__dorabot-tools__goals_'))) {
+              if (allTools.some(t => (
+                t?.startsWith('goals_')
+                || t?.startsWith('tasks_')
+                || t?.startsWith('mcp__dorabot-tools__goals_')
+                || t?.startsWith('mcp__dorabot-tools__tasks_')
+                || t?.startsWith('plan_')
+                || t?.startsWith('ideas_')
+                || t?.startsWith('mcp__dorabot-tools__plan_')
+                || t?.startsWith('mcp__dorabot-tools__ideas_')
+              ))) {
                 broadcast({ event: 'goals.update', data: {} });
-                macNotify('Dora', 'Goals updated');
+                macNotify('Dora', 'Goals/tasks updated');
               }
               if (allTools.some(t => t?.startsWith('research_') || t?.startsWith('mcp__dorabot-tools__research_'))) {
                 broadcast({ event: 'research.update', data: {} });
                 macNotify('Dora', 'Research updated');
               }
+            }
+
+            try {
+              await requestPendingTaskApprovals(channel, messageMetadata?.chatId, sessionKey);
+            } catch (err) {
+              console.error('[gateway] failed requesting pending task approvals:', err);
             }
 
             // per-turn channel cleanup — delete status msg, send result, reset for next turn
@@ -2199,7 +2632,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               }
             }
 
-            finishGoalRun(sessionKey, 'completed');
+            finishPlanRun(sessionKey, 'completed');
+            finishTaskRun(sessionKey, 'completed');
 
             // per-turn: mark idle so sidebar spinner stops
             sessionRegistry.setActiveRun(sessionKey, false);
@@ -2246,13 +2680,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           }
         }
 
-        // agent.result and goals.update are broadcast per-turn inside executeStream's result handler.
+        // agent.result and planning updates are broadcast per-turn inside executeStream's result handler.
         // This point is only reached when the run actually ends (abort, error, or non-persistent provider).
         console.log(`[gateway] agent run ended: source=${source} result="${result.result.slice(0, 100)}..." cost=$${result.usage.totalCostUsd?.toFixed(4) || '?'}`);
       } catch (err) {
         console.error(`[gateway] agent error: source=${source}`, err);
         const errMsg = err instanceof Error ? err.message : String(err);
-        finishGoalRun(sessionKey, 'error', errMsg);
+        finishPlanRun(sessionKey, 'error', errMsg);
+        finishTaskRun(sessionKey, 'error', errMsg);
         if (isAuthError(err)) {
           console.log(`[gateway] auth error for ${source}, starting re-auth flow`);
           await startReauthFlow({ prompt, sessionKey, source, channel, chatId: messageMetadata?.chatId, messageMetadata }).catch(() => {});
@@ -2288,8 +2723,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         broadcastStatus(sessionKey, 'idle');
         broadcast({ event: 'status.update', data: { activeRun: false, source, sessionKey } });
         broadcastSessionUpdate(sessionKey);
-        if (goalRunBySession.has(sessionKey)) {
-          finishGoalRun(sessionKey, 'error', 'run ended');
+        if (planRunBySession.has(sessionKey)) {
+          finishPlanRun(sessionKey, 'error', 'run ended');
+        }
+        if (taskRunBySession.has(sessionKey)) {
+          finishTaskRun(sessionKey, 'error', 'run ended');
         }
       }
     });
@@ -2406,24 +2844,29 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           const prompt = params?.prompt as string;
           if (!prompt) return { id, error: 'prompt required' };
 
-          const chatId = (params?.chatId as string) || `task-${Date.now()}`;
-          const sessionKey = `desktop:dm:${chatId}`;
-          let session = sessionRegistry.getOrCreate({
+          const chatId = (params?.chatId as string) || randomUUID();
+          const requestedSessionKey = params?.sessionKey as string | undefined;
+          // use client-provided sessionKey if it exists in the registry (e.g. replying to a calendar session)
+          const existingSession = requestedSessionKey ? sessionRegistry.get(requestedSessionKey) : undefined;
+          const sessionKey = existingSession ? requestedSessionKey! : `desktop:dm:${chatId}`;
+          let session = existingSession || sessionRegistry.getOrCreate({
             channel: 'desktop',
             chatId,
           });
 
-          // idle timeout: reset session if too long since last message
-          const desktopGap = Date.now() - session.lastMessageAt;
-          if (session.messageCount > 0 && desktopGap > IDLE_TIMEOUT_MS) {
-            console.log(`[gateway] idle timeout for ${session.key} (${Math.floor(desktopGap / 3600000)}h), starting new session`);
-            fileSessionManager.setMetadata(session.sessionId, { sdkSessionId: undefined });
-            sessionRegistry.remove(session.key);
-            session = sessionRegistry.getOrCreate({ channel: 'desktop', chatId });
+          // idle timeout: reset session if too long since last message (skip for cross-session replies)
+          if (!existingSession) {
+            const desktopGap = Date.now() - session.lastMessageAt;
+            if (session.messageCount > 0 && desktopGap > IDLE_TIMEOUT_MS) {
+              console.log(`[gateway] idle timeout for ${session.key} (${Math.floor(desktopGap / 3600000)}h), starting new session`);
+              fileSessionManager.setMetadata(session.sessionId, { sdkSessionId: undefined });
+              sessionRegistry.remove(session.key);
+              session = sessionRegistry.getOrCreate({ channel: 'desktop', chatId });
+            }
+            fileSessionManager.setMetadata(session.sessionId, { channel: 'desktop', chatId, chatType: 'dm' });
           }
 
           sessionRegistry.incrementMessages(session.key);
-          fileSessionManager.setMetadata(session.sessionId, { channel: 'desktop', chatId, chatType: 'dm' });
           broadcastSessionUpdate(sessionKey);
 
           // try injection into active run first
@@ -2934,118 +3377,414 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           return { id, result: updated };
         }
 
+        // legacy APIs removed in goals/tasks migration
+        case 'plans.list':
+        case 'plans.update':
+        case 'plans.delete':
+        case 'plans.start':
+        case 'plans.logs':
+        case 'ideas.list':
+        case 'ideas.add':
+        case 'ideas.update':
+        case 'ideas.delete':
+        case 'ideas.move':
+        case 'ideas.create_plan':
+        case 'worktree.create':
+        case 'worktree.stats':
+        case 'worktree.merge':
+        case 'worktree.remove':
+        case 'worktree.push_pr': {
+          return {
+            id,
+            error: 'deprecated API: plans/ideas/worktree has been removed, use goals.* and tasks.*',
+          };
+        }
+
+        // ── Goals & Tasks ──
+
         case 'goals.list': {
           const goals = loadGoals();
-          return { id, result: goals.tasks };
+          return { id, result: goals.goals };
         }
 
         case 'goals.add': {
-          const goals = loadGoals();
-          const title = params?.title as string;
+          const title = (params?.title as string || '').trim();
           if (!title) return { id, error: 'title required' };
+          const goals = loadGoals();
           const now = new Date().toISOString();
-          const ids = goals.tasks.map(t => parseInt(t.id, 10)).filter(n => !isNaN(n));
-          const newId = String((ids.length > 0 ? Math.max(...ids) : 0) + 1);
-          const source = (params?.source as string) || 'user';
-          const task: GoalTask = {
-            id: newId,
+          const ids = goals.goals.map(g => Number.parseInt(g.id, 10)).filter(n => Number.isFinite(n));
+          const goal: Goal = {
+            id: String((ids.length ? Math.max(...ids) : 0) + 1),
             title,
             description: params?.description as string | undefined,
-            status: (params?.status as GoalTask['status']) || (source === 'user' ? 'approved' : 'proposed'),
-            priority: (params?.priority as GoalTask['priority']) || 'medium',
-            source: source as 'agent' | 'user',
+            status: (params?.status as Goal['status']) || 'active',
+            tags: (params?.tags as string[] | undefined) || [],
+            reason: params?.reason as string | undefined,
             createdAt: now,
             updatedAt: now,
-            tags: params?.tags as string[] | undefined,
           };
-          goals.tasks.push(task);
+          goals.goals.push(goal);
           saveGoals(goals);
-          broadcast({ event: 'goals.update', data: {} });
-          macNotify('Dora', `Goal added: ${task.title}`);
-          return { id, result: task };
+          broadcast({ event: 'goals.update', data: { goalId: goal.id, goal } });
+          macNotify('Dora', `Goal created: ${goal.title}`);
+          return { id, result: goal };
         }
 
         case 'goals.update': {
-          const taskId = params?.id as string;
-          if (!taskId) return { id, error: 'id required' };
+          const goalId = params?.id as string;
+          if (!goalId) return { id, error: 'id required' };
           const goals = loadGoals();
-          const task = goals.tasks.find(t => t.id === taskId);
-          if (!task) return { id, error: 'task not found' };
-          const now = new Date().toISOString();
-          if (params?.status !== undefined) task.status = params.status as GoalTask['status'];
-          if (params?.title !== undefined) task.title = params.title as string;
-          if (params?.description !== undefined) task.description = params.description as string;
-          if (params?.priority !== undefined) task.priority = params.priority as GoalTask['priority'];
-          if (params?.result !== undefined) task.result = params.result as string;
-          if (params?.tags !== undefined) task.tags = params.tags as string[];
-          task.updatedAt = now;
-          if (task.status === 'done') task.completedAt = now;
+          const goal = goals.goals.find(g => g.id === goalId);
+          if (!goal) return { id, error: 'goal not found' };
+
+          if (params?.title !== undefined) goal.title = params.title as string;
+          if (params?.description !== undefined) goal.description = params.description as string;
+          if (params?.status !== undefined) goal.status = params.status as Goal['status'];
+          if (params?.tags !== undefined) goal.tags = params.tags as string[];
+          if (params?.reason !== undefined) goal.reason = params.reason as string;
+          goal.updatedAt = new Date().toISOString();
           saveGoals(goals);
-          broadcast({ event: 'goals.update', data: {} });
-          macNotify('Dora', `Goal updated: ${task.title}`);
-          return { id, result: task };
+
+          broadcast({ event: 'goals.update', data: { goalId: goal.id, goal } });
+          macNotify('Dora', `Goal updated: ${goal.title}`);
+          return { id, result: goal };
         }
 
         case 'goals.delete': {
-          const taskId = params?.id as string;
-          if (!taskId) return { id, error: 'id required' };
-          const goals = loadGoals();
-          const before = goals.tasks.length;
-          goals.tasks = goals.tasks.filter(t => t.id !== taskId);
-          if (goals.tasks.length === before) return { id, error: 'task not found' };
-          saveGoals(goals);
-          broadcast({ event: 'goals.update', data: {} });
-          macNotify('Dora', `Goal deleted: #${taskId}`);
-          return { id, result: { deleted: true } };
-        }
-
-        case 'goals.move': {
-          const taskId = params?.id as string;
-          const status = params?.status as string;
-          if (!taskId || !status) return { id, error: 'id and status required' };
-          const goals = loadGoals();
-          const task = goals.tasks.find(t => t.id === taskId);
-          if (!task) return { id, error: 'task not found' };
-          task.status = status as GoalTask['status'];
-          task.updatedAt = new Date().toISOString();
-          if (status === 'done') task.completedAt = task.updatedAt;
-          saveGoals(goals);
-          broadcast({ event: 'goals.update', data: {} });
-          macNotify('Dora', `Goal moved: ${task.title} → ${status}`);
-          return { id, result: task };
-        }
-
-        case 'goals.execute': {
           const goalId = params?.id as string;
           if (!goalId) return { id, error: 'id required' };
 
           const goals = loadGoals();
-          const task = goals.tasks.find(t => t.id === goalId);
-          if (!task) return { id, error: 'task not found' };
-          if (task.status !== 'approved' && task.status !== 'in_progress') {
-            return { id, error: 'goal must be approved or in_progress to execute' };
-          }
+          const before = goals.goals.length;
+          goals.goals = goals.goals.filter(g => g.id !== goalId);
+          if (goals.goals.length === before) return { id, error: 'goal not found' };
+          saveGoals(goals);
 
-          const existing = activeGoalRuns.get(goalId);
-          if (existing) {
-            const active = sessionRegistry.get(existing.sessionKey)?.activeRun || false;
-            if (active) return { id, error: 'goal execution already running' };
-            activeGoalRuns.delete(goalId);
-            if (goalRunBySession.get(existing.sessionKey) === goalId) {
-              goalRunBySession.delete(existing.sessionKey);
+          // keep orphan tasks valid if their goal is deleted
+          const tasks = loadTasks();
+          let changed = false;
+          for (const task of tasks.tasks) {
+            if (task.goalId === goalId) {
+              task.goalId = undefined;
+              task.updatedAt = new Date().toISOString();
+              changed = true;
+            }
+          }
+          if (changed) saveTasks(tasks);
+
+          broadcast({ event: 'goals.update', data: { goalId, deleted: true } });
+          macNotify('Dora', `Goal deleted: #${goalId}`);
+          return { id, result: { deleted: true } };
+        }
+
+        case 'tasks.list': {
+          const tasks = loadTasks();
+          return { id, result: tasks.tasks };
+        }
+
+        case 'tasks.add': {
+          const title = (params?.title as string || '').trim();
+          if (!title) return { id, error: 'title required' };
+          const tasks = loadTasks();
+          const now = new Date().toISOString();
+          const ids = tasks.tasks.map(t => Number.parseInt(t.id, 10)).filter(n => Number.isFinite(n));
+          const taskId = String((ids.length ? Math.max(...ids) : 0) + 1);
+          const requestedStatus = (params?.status as Task['status']) || 'planning';
+          const normalizedStatus = (requestedStatus === 'in_progress' || requestedStatus === 'done')
+            ? 'planned'
+            : requestedStatus;
+          const task: Task = {
+            id: taskId,
+            goalId: params?.goalId as string | undefined,
+            title,
+            status: normalizedStatus,
+            plan: params?.plan as string | undefined,
+            planDocPath: getTaskPlanPath(taskId),
+            result: params?.result as string | undefined,
+            reason: params?.reason as string | undefined,
+            sessionId: params?.sessionId as string | undefined,
+            sessionKey: params?.sessionKey as string | undefined,
+            createdAt: now,
+            updatedAt: now,
+            completedAt: undefined,
+          };
+          ensureTaskPlanDoc(task, task.plan);
+          task.plan = readTaskPlanDoc(task);
+          tasks.tasks.push(task);
+          saveTasks(tasks);
+          appendTaskLog(task.id, 'rpc_add', `Task created: ${task.title}`);
+          broadcast({ event: 'goals.update', data: { taskId: task.id, task } });
+          macNotify('Dora', `Task created: ${task.title}`);
+          if (task.status === 'planned') {
+            await requestTaskApproval(task.id);
+          }
+          return { id, result: task };
+        }
+
+        case 'tasks.update': {
+          const taskId = params?.id as string;
+          if (!taskId) return { id, error: 'id required' };
+          const tasks = loadTasks();
+          const task = tasks.tasks.find(t => t.id === taskId);
+          if (!task) return { id, error: 'task not found' };
+
+          if (params?.title !== undefined) task.title = params.title as string;
+          if (params?.goalId !== undefined) task.goalId = (params.goalId as string) || undefined;
+          if (params?.plan !== undefined) {
+            writeTaskPlanDoc(task, params.plan as string);
+          } else {
+            ensureTaskPlanDoc(task, task.plan);
+            task.plan = readTaskPlanDoc(task);
+          }
+          if (params?.result !== undefined) task.result = params.result as string;
+          if (params?.reason !== undefined) task.reason = params.reason as string;
+          if (params?.sessionId !== undefined) task.sessionId = params.sessionId as string;
+          if (params?.sessionKey !== undefined) task.sessionKey = params.sessionKey as string;
+
+          const requestedStatus = params?.status as Task['status'] | undefined;
+          if (requestedStatus !== undefined) {
+            if ((requestedStatus === 'in_progress' || requestedStatus === 'done') && !task.approvedAt) {
+              task.status = 'planned';
+            } else {
+              task.status = requestedStatus;
             }
           }
 
-          const now = new Date().toISOString();
-          if (task.status === 'approved') {
-            task.status = 'in_progress';
-            task.updatedAt = now;
-            saveGoals(goals);
-            broadcast({ event: 'goals.update', data: {} });
-            macNotify('Dora', `Goal started: ${task.title}`);
+          task.updatedAt = new Date().toISOString();
+          if (task.status === 'done' && !task.completedAt) task.completedAt = task.updatedAt;
+          if (task.status !== 'done') task.completedAt = undefined;
+          if (task.status !== 'planned') task.approvalRequestId = undefined;
+          saveTasks(tasks);
+
+          appendTaskLog(task.id, 'rpc_update', `Task updated: ${task.title}`, {
+            status: task.status,
+            goalId: task.goalId,
+          });
+          broadcast({ event: 'goals.update', data: { taskId: task.id, task } });
+          macNotify('Dora', `Task updated: ${task.title}`);
+
+          if (task.status === 'planned') {
+            await requestTaskApproval(task.id);
           }
 
-          const chatId = `goal-${goalId}`;
+          return { id, result: task };
+        }
+
+        case 'tasks.delete': {
+          const taskId = params?.id as string;
+          if (!taskId) return { id, error: 'id required' };
+          const tasks = loadTasks();
+          const before = tasks.tasks.length;
+          tasks.tasks = tasks.tasks.filter(t => t.id !== taskId);
+          if (tasks.tasks.length === before) return { id, error: 'task not found' };
+          saveTasks(tasks);
+          activeTaskRuns.delete(taskId);
+          appendTaskLog(taskId, 'rpc_delete', `Task #${taskId} deleted`);
+          broadcast({ event: 'goals.update', data: { taskId, deleted: true } });
+          macNotify('Dora', `Task deleted: #${taskId}`);
+          return { id, result: { deleted: true } };
+        }
+
+        case 'tasks.logs': {
+          const taskId = params?.id as string;
+          if (!taskId) return { id, error: 'id required' };
+          const limit = Number(params?.limit || 100);
+          return { id, result: readTaskLogs(taskId, Math.min(Math.max(limit, 1), 500)) };
+        }
+
+        case 'tasks.plan.read': {
+          const taskId = params?.id as string;
+          if (!taskId) return { id, error: 'id required' };
+          const tasks = loadTasks();
+          const task = tasks.tasks.find(t => t.id === taskId);
+          if (!task) return { id, error: 'task not found' };
+          ensureTaskPlanDoc(task, task.plan);
+          const content = readTaskPlanDoc(task);
+          return {
+            id,
+            result: {
+              id: task.id,
+              path: task.planDocPath || getTaskPlanPath(task.id),
+              content,
+            },
+          };
+        }
+
+        case 'tasks.plan.write': {
+          const taskId = params?.id as string;
+          const content = params?.content;
+          if (!taskId) return { id, error: 'id required' };
+          if (typeof content !== 'string') return { id, error: 'content required' };
+          const tasks = loadTasks();
+          const task = tasks.tasks.find(t => t.id === taskId);
+          if (!task) return { id, error: 'task not found' };
+          writeTaskPlanDoc(task, content);
+          task.updatedAt = new Date().toISOString();
+          saveTasks(tasks);
+          appendTaskLog(task.id, 'plan_update', 'Task PLAN.md updated');
+          broadcast({ event: 'goals.update', data: { taskId: task.id, task } });
+          broadcast({
+            event: 'tasks.log',
+            data: { taskId: task.id, eventType: 'plan_update', message: 'Task PLAN.md updated', timestamp: Date.now() },
+          });
+          return {
+            id,
+            result: {
+              id: task.id,
+              path: task.planDocPath || getTaskPlanPath(task.id),
+              content: task.plan || '',
+            },
+          };
+        }
+
+        case 'tasks.start': {
+          const taskId = params?.id as string;
+          if (!taskId) return { id, error: 'id required' };
+          const mode = (params?.mode as 'plan' | 'execute') || 'execute';
+
+          const tasks = loadTasks();
+          const task = tasks.tasks.find(t => t.id === taskId);
+          if (!task) return { id, error: 'task not found' };
+          if (task.status === 'planned' || task.approvalRequestId) {
+            const requestId = task.approvalRequestId || randomUUID();
+            pendingTaskApprovals.delete(requestId);
+            const startedFromApproval = await handleTaskApprovalDecision(task.id, requestId, true, undefined, mode);
+            if (!startedFromApproval) return { id, error: 'task approval failed' };
+            return { id, result: startedFromApproval };
+          }
+
+          const started = await startTaskExecution(task.id, mode);
+          return { id, result: started };
+        }
+
+        case 'tasks.approve': {
+          const requestId = params?.requestId as string | undefined;
+          const taskId = params?.taskId as string | undefined;
+
+          let finalTaskId = taskId;
+          let finalRequestId = requestId;
+          if (!finalRequestId && finalTaskId) {
+            const task = loadTasks().tasks.find(t => t.id === finalTaskId);
+            finalRequestId = task?.approvalRequestId;
+          }
+          if (!finalTaskId && finalRequestId) {
+            finalTaskId = pendingTaskApprovals.get(finalRequestId)?.taskId;
+          }
+          if (!finalTaskId || !finalRequestId) return { id, error: 'taskId or requestId required' };
+          pendingTaskApprovals.delete(finalRequestId);
+          await handleTaskApprovalDecision(finalTaskId, finalRequestId, true);
+          return { id, result: { approved: true, taskId: finalTaskId } };
+        }
+
+        case 'tasks.deny': {
+          const requestId = params?.requestId as string | undefined;
+          const taskId = params?.taskId as string | undefined;
+          const reason = (params?.reason as string) || 'user denied';
+
+          let finalTaskId = taskId;
+          let finalRequestId = requestId;
+          if (!finalRequestId && finalTaskId) {
+            const task = loadTasks().tasks.find(t => t.id === finalTaskId);
+            finalRequestId = task?.approvalRequestId;
+          }
+          if (!finalTaskId && finalRequestId) {
+            finalTaskId = pendingTaskApprovals.get(finalRequestId)?.taskId;
+          }
+          if (!finalTaskId || !finalRequestId) return { id, error: 'taskId or requestId required' };
+          pendingTaskApprovals.delete(finalRequestId);
+          await handleTaskApprovalDecision(finalTaskId, finalRequestId, false, reason);
+          return { id, result: { approved: false, taskId: finalTaskId, reason } };
+        }
+
+        case 'plans.list': {
+          const plans = loadPlans();
+          return { id, result: plans.tasks };
+        }
+
+        case 'plans.update': {
+          const planId = params?.id as string;
+          if (!planId) return { id, error: 'id required' };
+          const plans = loadPlans();
+          const plan = plans.tasks.find(t => t.id === planId);
+          if (!plan) return { id, error: 'plan not found' };
+
+          if (params?.title !== undefined) plan.title = params.title as string;
+          if (params?.description !== undefined) plan.description = params.description as string;
+          if (params?.type !== undefined) plan.type = params.type as Plan['type'];
+          if (params?.status !== undefined) plan.status = params.status as Plan['status'];
+          if (params?.runState !== undefined) plan.runState = params.runState as Plan['runState'];
+          if (params?.result !== undefined) plan.result = params.result as string;
+          if (params?.error !== undefined) plan.error = params.error as string;
+          if (params?.tags !== undefined) plan.tags = params.tags as string[];
+          if (params?.sessionKey !== undefined) plan.sessionKey = params.sessionKey as string;
+          if (params?.worktreePath !== undefined) plan.worktreePath = params.worktreePath as string;
+          if (params?.branch !== undefined) plan.branch = params.branch as string;
+          plan.updatedAt = new Date().toISOString();
+          if (plan.status === 'done' && !plan.completedAt) plan.completedAt = plan.updatedAt;
+          if (plan.status !== 'done') plan.completedAt = undefined;
+
+          savePlans(plans);
+          appendPlanLog(plan.id, 'rpc_update', `Plan updated: ${plan.title}`, {
+            status: plan.status,
+            runState: plan.runState,
+          });
+          broadcast({ event: 'plans.update', data: { planId: plan.id, plan } });
+          broadcast({
+            event: 'plans.log',
+            data: { planId: plan.id, eventType: 'rpc_update', message: `Plan updated: ${plan.title}`, timestamp: Date.now() },
+          });
+          macNotify('Dora', `Plan updated: ${plan.title}`);
+          return { id, result: plan };
+        }
+
+        case 'plans.delete': {
+          const planId = params?.id as string;
+          if (!planId) return { id, error: 'id required' };
+          const plans = loadPlans();
+          const before = plans.tasks.length;
+          plans.tasks = plans.tasks.filter(t => t.id !== planId);
+          if (plans.tasks.length === before) return { id, error: 'plan not found' };
+          savePlans(plans);
+          activePlanRuns.delete(planId);
+          broadcast({ event: 'plans.update', data: { planId, deleted: true } });
+          macNotify('Dora', `Plan deleted: #${planId}`);
+          return { id, result: { deleted: true } };
+        }
+
+        case 'plans.logs': {
+          const planId = params?.id as string;
+          if (!planId) return { id, error: 'id required' };
+          const limit = Number(params?.limit || 100);
+          return { id, result: readPlanLogs(planId, Math.min(Math.max(limit, 1), 500)) };
+        }
+
+        case 'plans.start': {
+          const planId = params?.id as string;
+          if (!planId) return { id, error: 'id required' };
+
+          const plans = loadPlans();
+          const plan = plans.tasks.find(t => t.id === planId);
+          if (!plan) return { id, error: 'plan not found' };
+          if (plan.status === 'done') return { id, error: 'plan is already done' };
+
+          const existing = activePlanRuns.get(planId);
+          if (existing) {
+            const active = sessionRegistry.get(existing.sessionKey)?.activeRun || false;
+            if (active) return { id, error: 'plan execution already running' };
+            activePlanRuns.delete(planId);
+            if (planRunBySession.get(existing.sessionKey) === planId) {
+              planRunBySession.delete(existing.sessionKey);
+            }
+          }
+
+          const worktree = ensureWorktreeForPlan({
+            planId,
+            title: plan.title,
+            cwd: config.cwd,
+            baseBranch: params?.baseBranch as string | undefined,
+          });
+
+          const chatId = `plan-${planId}`;
           const session = sessionRegistry.getOrCreate({
             channel: 'desktop',
             chatType: 'dm',
@@ -3056,13 +3795,42 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           fileSessionManager.setMetadata(session.sessionId, { channel: 'desktop', chatId, chatType: 'dm' });
           broadcastSessionUpdate(session.key);
 
-          const prompt = buildGoalExecutionPrompt(task);
-          markGoalRunStarted(goalId, sessionKey);
+          const now = new Date().toISOString();
+          plan.status = 'in_progress';
+          plan.runState = 'running';
+          plan.error = undefined;
+          plan.sessionKey = sessionKey;
+          plan.worktreePath = worktree.path;
+          plan.branch = worktree.branch;
+          plan.updatedAt = now;
+          savePlans(plans);
+
+          const ideas = loadIdeas();
+          const idea = plan.ideaId ? ideas.items.find(r => r.id === plan.ideaId) : null;
+          const ideaContext = idea
+            ? `#${idea.id} [${idea.lane}] ${idea.title}\nProblem: ${idea.problem || ''}\nOutcome: ${idea.outcome || ''}\nAudience: ${idea.audience || ''}`
+            : undefined;
+          const prompt = buildPlanExecutionPrompt(plan, ideaContext, readPlanDoc(plan));
+
+          appendPlanLog(plan.id, 'run_started', `Plan started: ${plan.title}`, {
+            sessionKey,
+            worktreePath: worktree.path,
+            branch: worktree.branch,
+          });
+          broadcast({ event: 'plans.update', data: { planId: plan.id, plan } });
+          broadcast({
+            event: 'plans.log',
+            data: { planId: plan.id, eventType: 'run_started', message: `Plan started: ${plan.title}`, timestamp: Date.now() },
+          });
+          markPlanRunStarted(planId, sessionKey);
+          macNotify('Dora', `Plan started: ${plan.title}`);
 
           void handleAgentRun({
             prompt,
             sessionKey,
-            source: `goals/${goalId}`,
+            source: `plans/${planId}`,
+            cwd: worktree.path,
+            extraContext: `Worktree path: ${worktree.path}\nBranch: ${worktree.branch}\nBase branch: ${worktree.baseBranch}`,
             messageMetadata: {
               channel: 'desktop',
               chatId,
@@ -3070,21 +3838,236 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
               body: prompt,
             },
           }).then((res) => {
-            if (!res) finishGoalRun(sessionKey, 'error', 'goal execution did not start');
+            if (!res) finishPlanRun(sessionKey, 'error', 'plan execution did not start');
           }).catch((err) => {
-            finishGoalRun(sessionKey, 'error', err instanceof Error ? err.message : String(err));
+            finishPlanRun(sessionKey, 'error', err instanceof Error ? err.message : String(err));
           });
 
           return {
             id,
             result: {
               started: true,
-              goalId,
+              planId,
               sessionKey,
               sessionId: session.sessionId,
               chatId,
+              worktreePath: worktree.path,
+              branch: worktree.branch,
             },
           };
+        }
+
+        case 'ideas.list': {
+          const state = loadIdeas();
+          return { id, result: state.items };
+        }
+
+        case 'ideas.add': {
+          const title = params?.title as string;
+          if (!title) return { id, error: 'title required' };
+          const state = loadIdeas();
+          const now = new Date().toISOString();
+          const lane = (params?.lane as 'now' | 'next' | 'later') || 'next';
+          const sortOrder = Math.max(
+            0,
+            ...state.items.filter(i => i.lane === lane).map(i => i.sortOrder || 0),
+          ) + 1;
+          const ids = state.items.map(i => Number.parseInt(i.id, 10)).filter(n => Number.isFinite(n));
+          const item = {
+            id: String((ids.length ? Math.max(...ids) : 0) + 1),
+            title,
+            description: params?.description as string | undefined,
+            lane,
+            impact: params?.impact as string | undefined,
+            effort: params?.effort as string | undefined,
+            problem: params?.problem as string | undefined,
+            outcome: params?.outcome as string | undefined,
+            audience: params?.audience as string | undefined,
+            risks: params?.risks as string | undefined,
+            notes: params?.notes as string | undefined,
+            tags: params?.tags as string[] | undefined,
+            linkedPlanIds: [] as string[],
+            createdAt: now,
+            updatedAt: now,
+            sortOrder,
+          };
+          state.items.push(item);
+          saveIdeas(state);
+          broadcast({ event: 'plans.update', data: { ideasVersion: state.version } });
+          return { id, result: item };
+        }
+
+        case 'ideas.update': {
+          const ideaId = params?.id as string;
+          if (!ideaId) return { id, error: 'id required' };
+          const state = loadIdeas();
+          const item = state.items.find(i => i.id === ideaId);
+          if (!item) return { id, error: 'idea not found' };
+
+          if (params?.title !== undefined) item.title = params.title as string;
+          if (params?.description !== undefined) item.description = params.description as string;
+          if (params?.lane !== undefined) item.lane = params.lane as 'now' | 'next' | 'later' | 'done';
+          if (params?.impact !== undefined) item.impact = params.impact as string;
+          if (params?.effort !== undefined) item.effort = params.effort as string;
+          if (params?.problem !== undefined) item.problem = params.problem as string;
+          if (params?.outcome !== undefined) item.outcome = params.outcome as string;
+          if (params?.audience !== undefined) item.audience = params.audience as string;
+          if (params?.risks !== undefined) item.risks = params.risks as string;
+          if (params?.notes !== undefined) item.notes = params.notes as string;
+          if (params?.tags !== undefined) item.tags = params.tags as string[];
+          if (params?.linkedPlanIds !== undefined) item.linkedPlanIds = params.linkedPlanIds as string[];
+          if (params?.sortOrder !== undefined) item.sortOrder = Number(params.sortOrder);
+          item.updatedAt = new Date().toISOString();
+          saveIdeas(state);
+          broadcast({ event: 'plans.update', data: { ideaId: item.id } });
+          return { id, result: item };
+        }
+
+        case 'ideas.delete': {
+          const ideaId = params?.id as string;
+          if (!ideaId) return { id, error: 'id required' };
+          const state = loadIdeas();
+          const before = state.items.length;
+          state.items = state.items.filter(i => i.id !== ideaId);
+          if (state.items.length === before) return { id, error: 'idea not found' };
+          saveIdeas(state);
+          broadcast({ event: 'plans.update', data: { ideaId, deleted: true } });
+          return { id, result: { deleted: true } };
+        }
+
+        case 'ideas.move': {
+          const ideaId = params?.id as string;
+          if (!ideaId) return { id, error: 'id required' };
+          const state = loadIdeas();
+          const item = state.items.find(i => i.id === ideaId);
+          if (!item) return { id, error: 'idea not found' };
+          const lane = (params?.lane as 'now' | 'next' | 'later' | 'done') || item.lane;
+          item.lane = lane;
+          item.sortOrder = Number(params?.sortOrder || item.sortOrder || 1);
+          item.updatedAt = new Date().toISOString();
+          saveIdeas(state);
+          broadcast({ event: 'plans.update', data: { ideaId: item.id } });
+          return { id, result: item };
+        }
+
+        case 'ideas.create_plan': {
+          const ideaId = params?.ideaId as string;
+          if (!ideaId) return { id, error: 'ideaId required' };
+          const state = loadIdeas();
+          const item = state.items.find(i => i.id === ideaId);
+          if (!item) return { id, error: 'idea not found' };
+
+          const plan = createPlanFromIdea({
+            ideaId: item.id,
+            title: (params?.title as string) || item.title,
+            description: (params?.description as string) || item.description || item.outcome || item.problem,
+            type: (params?.type as Plan['type']) || 'feature',
+            tags: (params?.tags as string[]) || item.tags,
+          });
+
+          if (!item.linkedPlanIds.includes(plan.id)) {
+            item.linkedPlanIds.push(plan.id);
+            item.updatedAt = new Date().toISOString();
+            saveIdeas(state);
+          }
+
+          appendPlanLog(plan.id, 'created_from_idea', `Created from idea #${item.id}`, { ideaId: item.id });
+          broadcast({ event: 'plans.update', data: { planId: plan.id, ideaId: item.id } });
+          broadcast({
+            event: 'plans.log',
+            data: { planId: plan.id, eventType: 'created_from_idea', message: `Created from idea #${item.id}`, timestamp: Date.now() },
+          });
+          return { id, result: { plan, idea: item } };
+        }
+
+        case 'worktree.create': {
+          const planId = params?.planId as string;
+          if (!planId) return { id, error: 'planId required' };
+          const plans = loadPlans();
+          const plan = plans.tasks.find(p => p.id === planId);
+          const worktree = ensureWorktreeForPlan({
+            planId,
+            title: plan?.title,
+            cwd: config.cwd,
+            baseBranch: params?.baseBranch as string | undefined,
+          });
+          if (plan) {
+            plan.worktreePath = worktree.path;
+            plan.branch = worktree.branch;
+            plan.updatedAt = new Date().toISOString();
+            savePlans(plans);
+            broadcast({ event: 'plans.update', data: { planId: plan.id, plan } });
+          }
+          return { id, result: worktree };
+        }
+
+        case 'worktree.stats': {
+          const planId = params?.planId as string | undefined;
+          let worktreePath = params?.path as string | undefined;
+          if (!worktreePath && planId) {
+            const plans = loadPlans();
+            worktreePath = plans.tasks.find(p => p.id === planId)?.worktreePath;
+          }
+          if (!worktreePath) return { id, error: 'path or planId required' };
+          return { id, result: getWorktreeStats(worktreePath) };
+        }
+
+        case 'worktree.merge': {
+          const planId = params?.planId as string | undefined;
+          let sourceBranch = params?.sourceBranch as string | undefined;
+          if (!sourceBranch && planId) {
+            const plans = loadPlans();
+            sourceBranch = plans.tasks.find(p => p.id === planId)?.branch;
+          }
+          if (!sourceBranch) return { id, error: 'sourceBranch or planId required' };
+          const merged = mergeWorktreeBranch({
+            cwd: config.cwd,
+            sourceBranch,
+            targetBranch: params?.targetBranch as string | undefined,
+          });
+          return { id, result: merged };
+        }
+
+        case 'worktree.push_pr': {
+          const planId = params?.planId as string | undefined;
+          let worktreePath = params?.path as string | undefined;
+          if (!worktreePath && planId) {
+            const plans = loadPlans();
+            worktreePath = plans.tasks.find(p => p.id === planId)?.worktreePath;
+          }
+          if (!worktreePath) return { id, error: 'path or planId required' };
+          const pushed = pushWorktreePr({
+            worktreePath,
+            baseBranch: params?.baseBranch as string | undefined,
+            title: params?.title as string | undefined,
+            body: params?.body as string | undefined,
+          });
+          return { id, result: pushed };
+        }
+
+        case 'worktree.remove': {
+          const planId = params?.planId as string | undefined;
+          let worktreePath = params?.path as string | undefined;
+          let branch = params?.branch as string | undefined;
+          const plans = loadPlans();
+          const plan = planId ? plans.tasks.find(p => p.id === planId) : undefined;
+          if (!worktreePath && plan) worktreePath = plan.worktreePath;
+          if (!branch && plan) branch = plan.branch;
+          if (!worktreePath) return { id, error: 'path or planId required' };
+          const removed = removeWorktree({
+            cwd: config.cwd,
+            worktreePath,
+            branch,
+            removeBranch: Boolean(params?.removeBranch),
+          });
+          if (plan) {
+            plan.worktreePath = undefined;
+            plan.branch = undefined;
+            plan.updatedAt = new Date().toISOString();
+            savePlans(plans);
+            broadcast({ event: 'plans.update', data: { planId: plan.id, plan } });
+          }
+          return { id, result: removed };
         }
 
         // ── Research ──
@@ -3589,6 +4572,20 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             return { id, result: { key, value } };
           }
 
+          if (key === 'userName' && typeof value === 'string') {
+            config.userName = value;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'userTimezone' && typeof value === 'string') {
+            config.userTimezone = value;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
           return { id, error: `unsupported config key: ${key}` };
         }
 
@@ -3739,6 +4736,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'tool.approve': {
           const requestId = params?.requestId as string;
           if (!requestId) return { id, error: 'requestId required' };
+          const pendingTask = pendingTaskApprovals.get(requestId);
+          if (pendingTask) {
+            pendingTaskApprovals.delete(requestId);
+            const started = await handleTaskApprovalDecision(pendingTask.taskId, requestId, true);
+            return { id, result: { approved: true, taskId: pendingTask.taskId, started: Boolean(started) } };
+          }
           const pending = pendingApprovals.get(requestId);
           if (!pending) return { id, error: 'no pending approval with that ID' };
           pendingApprovals.delete(requestId);
@@ -3750,6 +4753,13 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         case 'tool.deny': {
           const requestId = params?.requestId as string;
           if (!requestId) return { id, error: 'requestId required' };
+          const pendingTask = pendingTaskApprovals.get(requestId);
+          if (pendingTask) {
+            pendingTaskApprovals.delete(requestId);
+            const reason = (params?.reason as string) || 'user denied';
+            await handleTaskApprovalDecision(pendingTask.taskId, requestId, false, reason);
+            return { id, result: { denied: true, taskId: pendingTask.taskId } };
+          }
           const pending = pendingApprovals.get(requestId);
           if (!pending) return { id, error: 'no pending approval with that ID' };
           pendingApprovals.delete(requestId);
@@ -3764,6 +4774,12 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             toolName: p.toolName,
             input: p.input,
           }));
+          const taskList = Array.from(pendingTaskApprovals.entries()).map(([reqId, p]) => ({
+            requestId: reqId,
+            toolName: 'task_start',
+            input: { taskId: p.taskId },
+          }));
+          list.push(...taskList);
           return { id, result: list };
         }
 
@@ -4210,6 +5226,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       clearInterval(heartbeatSweepTimer);
       for (const [, batch] of streamBatches) { if (batch.timer) clearTimeout(batch.timer); }
       streamBatches.clear();
+      unsubscribeClaudeAuthRequired();
+      unsubscribeCodexAuthRequired();
       for (const [, timer] of runEventPruneTimers) clearTimeout(timer);
       runEventPruneTimers.clear();
       scheduler?.stop();

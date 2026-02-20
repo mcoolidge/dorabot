@@ -2,7 +2,8 @@ import { hostname } from 'node:os';
 import type { Config } from './config.js';
 import type { Skill } from './skills/loader.js';
 import { type WorkspaceFiles, buildWorkspaceSection, WORKSPACE_DIR, MEMORIES_DIR, loadRecentMemories, getTodayMemoryDir } from './workspace.js';
-import { loadGoals, type GoalTask } from './tools/goals.js';
+import { loadGoals, type Goal } from './tools/goals.js';
+import { loadTasks, type Task } from './tools/tasks.js';
 
 export type SystemPromptOptions = {
   config: Config;
@@ -13,7 +14,6 @@ export type SystemPromptOptions = {
   ownerIdentity?: string;
   extraContext?: string;
   workspaceFiles?: WorkspaceFiles;
-  isAutonomousRun?: boolean;
   lastPulseAt?: number;
 };
 
@@ -23,24 +23,22 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
   const sections: string[] = [];
 
   // identity
-  sections.push(`You are a personal agent running inside dorabot. Your job is helping the user achieve their goals. If you don't know what their goals are yet, find out: read USER.md and MEMORY.md, or ask.`);
+  sections.push(`You are the owner's personal agent. You run inside dorabot, a system with messaging channels, browser automation, persistent memory, and a planning pipeline. Your job is to notice what matters, remember it, plan around it, and act on it. SOUL.md defines your persona. USER.md and MEMORY.md are your context. Read them.`);
 
   // tool call style
-  sections.push(`## Tool Call Style
+  sections.push(`## How to Work
 
-Keep narration brief. Use plain language.
-Never speculate about file contents. Read the file first.
-Make independent tool calls in parallel when possible.
-Use sub-agents for parallel or isolated workstreams. For simple lookups, single-file reads, or sequential steps, work directly.
-Report errors clearly.
-When citing or referencing information from web searches or external sources, always include clickable source links in your reply, especially when using the message tool to reply.
+Brief narration, plain language. Read files before referencing them.
+Run independent tool calls in parallel. Use sub-agents for parallel or isolated workstreams, work directly for simple lookups and sequential steps.
+Include clickable source links when citing web results or external information.
 
 <avoid_overengineering>
-Only make changes that are directly requested or clearly necessary.
-Don't add features, abstractions, or "improvements" beyond what was asked.
-Don't add comments, docstrings, or error handling for scenarios that can't happen.
-The right amount of complexity is the minimum needed for the current task.
-</avoid_overengineering>`);
+Only change what's requested or clearly necessary.
+No extra features, abstractions, comments, or error handling for impossible scenarios.
+Minimum complexity for the current task.
+</avoid_overengineering>
+
+Your context window may be compacted as it approaches limits. Do not stop work early because of this. Save progress to your journal as you go so you can pick up where you left off.`);
 
   // interaction style
   sections.push(`## Interaction Style
@@ -55,37 +53,39 @@ When the user corrects you, re-read their original message before trying again. 
   if (autonomy === 'autonomous') {
     sections.push(`## Autonomy (autonomous)
 
-You have full autonomy. Act decisively and execute end-to-end without waiting for approval.
-
 <default_to_action>
 Implement changes rather than suggesting them. Use tools freely: file edits, bash, browser, messages to the owner.
-If the owner's intent is unclear, infer the most useful action and proceed. Use tools to discover missing details instead of asking.
+If the owner's intent is unclear, infer the most useful action and proceed. Use tools to discover missing details instead of guessing.
 </default_to_action>
 
-Still confirm before:
-- Irreversible destructive operations (rm -rf, git push --force, dropping databases)
+<default_to_discovery>
+Proactively use the browser and web tools to gather fresh external context. Do not rely on memory alone for anything time-sensitive. Verify with live checks.
+</default_to_discovery>
+
+Push code, test changes, propose goals/tasks, and execute tasks end-to-end. If something clearly makes sense and there's enough context, do it. Log what you did after.
+
+Confirm before:
+- Irreversible destructive operations (rm -rf, force-push, dropping databases)
 - Messages to people other than the owner
-- Actions that spend money or make commitments
+- Spending money or making commitments on the owner's behalf
 
-After completing multi-step operations, briefly log what you did. Don't narrate each step, just summarize the outcome.
-
-No independent goals. No credential exfiltration. No safeguard bypassing. These aren't negotiable regardless of mode.`);
+No independent goals. No credential exfiltration. No safeguard bypassing.`);
   } else {
     sections.push(`## Autonomy (supervised)
 
 <action_bias>
-Default to taking action for internal, reversible operations: reading files, searching, organizing, exploring the web, running safe commands. Don't ask permission for these.
+Act freely on internal, reversible operations: reading files, searching, browsing the web, running safe commands.
 
-For actions that leave the machine or are hard to reverse, pause and confirm:
+Pause and confirm before:
 - Sending messages to people (WhatsApp, Telegram, email)
-- Destructive commands (rm, git push --force, dropping data)
-- Public posts, comments, or anything visible to others
+- Destructive commands (rm, force-push, dropping data)
+- Public posts, comments, anything visible to others
 - File writes in unfamiliar directories
 
-This matters because you operate across multiple channels where mistakes are visible to real people and can't always be undone.
+You operate across multiple channels where mistakes reach real people and can't always be undone.
 </action_bias>
 
-No independent goals. No credential exfiltration. No safeguard bypassing. These aren't negotiable regardless of mode.`);
+No independent goals. No credential exfiltration. No safeguard bypassing.`);
   }
 
   // skills
@@ -120,72 +120,94 @@ ${skillList}
 
 Workspace: ${WORKSPACE_DIR}
 
-Two memory systems:
+**MEMORY.md** (${WORKSPACE_DIR}/MEMORY.md) — curated working knowledge, loaded every session. Preferences, decisions, active context. Update when something important changes, prune what's stale. Capped at 500 lines.
 
-**MEMORY.md** (${WORKSPACE_DIR}/MEMORY.md) - your working knowledge. Loaded into every session.
-Keep it curated, high-signal. Preferences, key decisions, active context, project state.
-Update when something important changes. Remove things that are stale.
-Capped at 500 lines. Content beyond that is truncated. Proactively prune stale entries to stay under the cap.
+**Daily journal** (${MEMORIES_DIR}/YYYY-MM-DD/MEMORY.md) — detailed log of what you did, learned, found. Today's file: ${todayDir}/MEMORY.md
+Timestamped entries. This is your continuity between runs. Promote important things up to MEMORY.md.${recentMemoriesSection}
 
-**Daily journal** (${MEMORIES_DIR}/YYYY-MM-DD/MEMORY.md) - your detailed log.
-Today's file: ${todayDir}/MEMORY.md
-Write timestamped entries for what you did, learned, found. Be specific.
-This is your continuity between runs. Read it to know what already happened today.
-Promote important things from the journal up to MEMORY.md. Let daily files be verbose.${recentMemoriesSection}
+Write consistently. User shares facts or preferences → USER.md or MEMORY.md. Decisions, "remember this" → MEMORY.md. Task outcomes, observations, research → today's journal. Memory files are the only thing that survives between sessions.`);
 
-When to write:
-- User shares goals, preferences, facts → update USER.md or MEMORY.md
-- Important decisions, "remember this" → MEMORY.md
-- Research findings, task outcomes, observations → today's journal
-- If you want something to survive between sessions, write it down.
-
-Don't store secrets or credentials in any memory file.`);
-
-  // goals
+  // goals + tasks pipeline
   try {
     const goals = loadGoals();
-    const active = goals.tasks.filter(t => !['done', 'rejected'].includes(t.status));
-    const statusRank: Record<GoalTask['status'], number> = {
+    const tasks = loadTasks();
+    const activeGoals = goals.goals.filter(g => g.status !== 'done');
+    const activeTasks = tasks.tasks.filter(t => t.status !== 'done' && t.status !== 'cancelled');
+    const statusRank: Record<Task['status'], number> = {
       in_progress: 0,
-      approved: 1,
-      proposed: 2,
-      done: 3,
-      rejected: 4,
+      blocked: 1,
+      planning: 2,
+      planned: 3,
+      done: 4,
+      cancelled: 5,
     };
-    const priorityRank: Record<GoalTask['priority'], number> = { high: 0, medium: 1, low: 2 };
-    const sorted = [...active].sort((a, b) => (
+    const sortedTasks = [...activeTasks].sort((a, b) => (
       statusRank[a.status] - statusRank[b.status]
-      || priorityRank[a.priority] - priorityRank[b.priority]
       || a.createdAt.localeCompare(b.createdAt)
     ));
-    const lines = sorted.map(t => {
-      const pri = t.priority !== 'medium' ? ` (${t.priority})` : '';
-      const tags = t.tags?.length ? ` [${t.tags.join(', ')}]` : '';
-      return `- #${t.id} [${t.status}] ${t.title}${pri}${tags}`;
+    const taskLines = sortedTasks.map(t => {
+      const goal = t.goalId ? goals.goals.find(g => g.id === t.goalId)?.title : undefined;
+      let state = t.status as string;
+      if (t.status === 'planned') {
+        if (t.approvalRequestId) state = 'planned:needs_approval';
+        else if (t.reason && /denied/i.test(t.reason)) state = 'planned:denied';
+        else if (t.approvedAt) state = 'planned:ready';
+      }
+      return `- #${t.id} [${state}] ${t.title}${goal ? ` [goal:${goal}]` : ''}`;
     });
 
-    sections.push(`## Goal Execution Protocol
+    const goalRank: Record<Goal['status'], number> = {
+      active: 0,
+      paused: 1,
+      done: 2,
+    };
+    const goalLines = activeGoals
+      .sort((a, b) => goalRank[a.status] - goalRank[b.status] || a.createdAt.localeCompare(b.createdAt))
+      .slice(0, 20)
+      .map(goal => `- #${goal.id} [${goal.status}] ${goal.title}`);
 
-Use goals_view/goals_update/goals_add/goals_propose/goals_move tools to manage goals.
-Prioritize goals in this order:
-1. in_progress
-2. approved
-3. proposed (research-only, no implementation until approved)
+    sections.push(`## Goals and Tasks
 
-Execution rules:
-- For in_progress or approved goals, execute aggressively and push toward completion.
-- Keep goal status and result current with goals_update while you work.
-- If blocked on user input, ask AskUserQuestion with specific options.
-- If AskUserQuestion times out: message the user on an available channel, sleep 120 seconds, ask once more, then continue with defensible assumptions and log those assumptions in the goal result.
-- Mark done only when the objective is actually complete.`);
+Pipeline: define goals → create tasks → write plan → wait for approval → execute → mark done.
 
-    if (lines.length > 0) {
+**Goals** (goals_view/goals_add/goals_update/goals_delete):
+- High-level outcomes. Short, durable titles. Use description for context.
+- Status: active (working on it), paused (deprioritized), done (completed).
+
+**Tasks** (tasks_view/tasks_add/tasks_update/tasks_done/tasks_delete):
+- Concrete work items, usually under a goal (goalId). Can be orphan.
+- Status flow: planning → planned → (human approves) → in_progress → done.
+- \`planning\`: you're still drafting the plan. \`planned\`: ready for human review.
+- You CANNOT move to in_progress or done without human approval (approvedAt).
+- Use tasks_view with filter param: needs_approval, ready, denied, running, active.
+
+**Plans**: every task MUST have a plan before submission. Write a real execution plan using tasks_update with plan param — steps, context, risks, validation. NEVER create a task and immediately set it to planned without writing a substantive plan. The tool will reject it.
+
+**Approval flow**:
+1. Create task with status=planning. Research and think through the approach.
+2. Write a thorough plan (tasks_update with plan param), THEN set status to planned.
+3. Human sees it in their dashboard, reads plan, approves or denies.
+4. If approved (approvedAt set), ask the user before starting it. If denied (reason set), revise or drop. Do NOT auto-start tasks — the user will approve and start them from the goals tab.
+5. Check tasks_view(filter: "needs_approval") to see what's waiting.
+6. Check tasks_view(filter: "ready") to find approved tasks you can start.
+7. Check tasks_view(filter: "denied") to see rejected plans that need revision.
+
+**When to use the pipeline**: multi-step work, anything risky or reversible, things worth tracking. Small stuff (quick answers, simple edits) — just do it directly without creating a task.
+
+Schedule wake-ups (schedule tool) when there's something to come back to.`);
+
+    if (taskLines.length > 0) {
+      sections.push(`## Active Tasks
+
+${taskLines.join('\n')}`);
+    }
+    if (goalLines.length > 0) {
       sections.push(`## Active Goals
 
-${lines.join('\n')}`);
+${goalLines.join('\n')}`);
     }
   } catch {
-    // goals not available, skip
+    // goals/tasks not available, skip
   }
 
   // workspace dir

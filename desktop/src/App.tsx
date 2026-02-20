@@ -22,7 +22,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import {
   MessageSquare, Radio, Zap, Brain, Settings2,
   Sparkles, LayoutGrid, Loader2, Star,
-  Sun, Moon, Clock, FileSearch, Plug
+  Sun, Moon, Clock, FileSearch, Plug, Folder, FolderOpen, X
 } from 'lucide-react';
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
@@ -35,7 +35,7 @@ type UpdateState = {
 
 const ONBOARDING_COMPLETED_KEY = 'dorabot:onboarding-completed';
 const ONBOARDING_UNAUTH_SNOOZE_UNTIL_KEY = 'dorabot:onboarding-unauth-snooze-until';
-const ONBOARDING_UNAUTH_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
+const ONBOARDING_UNAUTH_SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
 
 // soft two-tone chime via web audio api
 function playNotifSound() {
@@ -65,19 +65,24 @@ function playNotifSound() {
   } catch {}
 }
 
-const NAV_ITEMS: { id: TabType; label: string; icon: React.ReactNode }[] = [
-  { id: 'chat', label: 'Task', icon: <MessageSquare className="w-3.5 h-3.5" /> },
-  { id: 'channels', label: 'Channels', icon: <Radio className="w-3.5 h-3.5" /> },
+const PRIMARY_NAV_ITEMS: { id: TabType; label: string; icon: React.ReactNode }[] = [
+  { id: 'chat', label: 'Chat', icon: <MessageSquare className="w-3.5 h-3.5" /> },
   { id: 'goals', label: 'Goals', icon: <LayoutGrid className="w-3.5 h-3.5" /> },
-  { id: 'automation', label: 'Automations', icon: <Zap className="w-3.5 h-3.5" /> },
-  { id: 'extensions', label: 'Extensions', icon: <Sparkles className="w-3.5 h-3.5" /> },
   { id: 'research', label: 'Research', icon: <FileSearch className="w-3.5 h-3.5" /> },
-  { id: 'memory', label: 'Memory', icon: <Brain className="w-3.5 h-3.5" /> },
   { id: 'settings', label: 'Settings', icon: <Settings2 className="w-3.5 h-3.5" /> },
 ];
 
+const SECONDARY_NAV_ITEMS: { id: TabType; label: string; icon: React.ReactNode }[] = [
+  { id: 'channels', label: 'Channels', icon: <Radio className="w-3.5 h-3.5" /> },
+  { id: 'automation', label: 'Automations', icon: <Zap className="w-3.5 h-3.5" /> },
+  { id: 'extensions', label: 'Extensions', icon: <Sparkles className="w-3.5 h-3.5" /> },
+  { id: 'memory', label: 'Memory', icon: <Brain className="w-3.5 h-3.5" /> },
+];
+
+const ALL_NAV_ITEMS = [...PRIMARY_NAV_ITEMS, ...SECONDARY_NAV_ITEMS];
+
 export default function App() {
-  const [showFiles, setShowFiles] = useState(true);
+  const [showFiles, setShowFiles] = useState(false);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [sessionFilter, setSessionFilter] = useState<SessionFilter>('all');
   const [selectedChannel, setSelectedChannel] = useState<'whatsapp' | 'telegram'>('whatsapp');
@@ -134,6 +139,18 @@ export default function App() {
       }
     });
     return cleanup;
+  }, []);
+
+  // keep dense side panes collapsed on smaller windows
+  useEffect(() => {
+    const onResize = () => {
+      if (window.innerWidth < 1200) {
+        setShowFiles(false);
+      }
+    };
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
   }, []);
 
   const sensors = useSensors(
@@ -233,7 +250,7 @@ export default function App() {
           break;
         case 'goals.update':
           if (!allowPing('goals.update')) break;
-          toast('goals updated', { description: 'new goal activity', duration: 4000 });
+          toast('goals updated', { description: 'new goal/task activity', duration: 4000 });
           if (!windowFocused) {
             notify('goals updated');
             playNotifSound();
@@ -244,6 +261,13 @@ export default function App() {
           toast('research updated', { description: 'new research activity', duration: 4000 });
           if (!windowFocused) {
             notify('research updated');
+            playNotifSound();
+          }
+          break;
+        case 'auth.required':
+          toast.error(`${event.provider} authentication required`, { description: event.reason, duration: 8000 });
+          if (!windowFocused) {
+            notify(`${event.provider} auth required`);
             playNotifSound();
           }
           break;
@@ -300,7 +324,7 @@ export default function App() {
     const cid = chatId || sessionId;
     const sessionKey = `${ch}:${ct}:${cid}`;
     const session = gw.sessions.find(s => s.id === sessionId);
-    const label = session?.senderName || session?.chatId || sessionId.slice(8, 16);
+    const label = session?.senderName || session?.preview || sessionId.slice(8, 16);
 
     tabState.openChatTab({
       sessionId,
@@ -327,7 +351,7 @@ export default function App() {
         tabState.newChatTab();
       }
     } else {
-      tabState.openViewTab(navId, NAV_ITEMS.find(n => n.id === navId)?.label || navId);
+      tabState.openViewTab(navId, ALL_NAV_ITEMS.find(n => n.id === navId)?.label || navId);
     }
     setSelectedFile(null);
   }, [tabState, gw.sessionStates]);
@@ -508,18 +532,8 @@ export default function App() {
     onSwitchChannel: setSelectedChannel,
     onClearSelectedFile: () => setSelectedFile(null),
     onSetupChat: (prompt: string) => {
-      // Create/focus a chat tab in THIS group, then send
-      const group = layout.groups.find(g => g.id === groupId);
-      const existingChat = group?.tabIds
-        .map(id => tabState.tabs.find(t => t.id === id))
-        .find((t): t is Extract<Tab, { type: 'chat' }> => Boolean(t && isChatTab(t)));
-      if (existingChat) {
-        tabState.focusTab(existingChat.id, groupId);
-        setTimeout(() => gw.sendMessage(prompt, existingChat.sessionKey, existingChat.chatId), 0);
-      } else {
-        const created = tabState.newChatTab(groupId);
-        setTimeout(() => gw.sendMessage(prompt, created.sessionKey, created.chatId), 0);
-      }
+      const created = tabState.newChatTab(groupId);
+      setTimeout(() => gw.sendMessage(prompt, created.sessionKey, created.chatId), 0);
     },
     onNavClick: (navId: string) => handleNavClick(navId as TabType),
   }), [tabState, gw, selectedFile, selectedChannel, layout, handleNavClick, handleViewSession, draggingTab]);
@@ -647,7 +661,7 @@ export default function App() {
       {showOnboarding && (
         <OnboardingOverlay
           gateway={gw}
-          onComplete={(launchOnboard) => {
+          onComplete={(launchOnboard, profileData) => {
             setShowOnboarding(false);
             localStorage.setItem(ONBOARDING_COMPLETED_KEY, 'true');
             onboardingCompletedRef.current = true;
@@ -661,9 +675,12 @@ export default function App() {
               );
             }
             if (launchOnboard) {
-              // Launch the onboard skill in a new chat session
               const created = tabState.newChatTab();
-              setTimeout(() => gw.sendMessage('onboard', created.sessionKey, created.chatId), 200);
+              // Pass profile context so the onboard skill doesn't re-ask name/timezone
+              const context = profileData?.name
+                ? `onboard (my name is ${profileData.name}, timezone: ${profileData.timezone || 'auto'})`
+                : 'onboard';
+              setTimeout(() => gw.sendMessage(context, created.sessionKey, created.chatId), 200);
             }
           }}
         />
@@ -698,6 +715,17 @@ export default function App() {
         >
           {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
         </button>
+        {!layout.isMultiPane && (
+          <button
+            onClick={() => setShowFiles(v => !v)}
+            className="ml-1 p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors"
+            style={{ WebkitAppRegion: 'no-drag' } as any}
+            title={showFiles ? 'Hide file explorer' : 'Show file explorer'}
+            aria-label={showFiles ? 'Hide file explorer' : 'Show file explorer'}
+          >
+            {showFiles ? <FolderOpen className="w-4 h-4" /> : <Folder className="w-4 h-4" />}
+          </button>
+        )}
       </div>
 
       {/* Update banner */}
@@ -749,7 +777,30 @@ export default function App() {
           <div className="flex flex-col h-full min-h-0">
             <div className="shrink-0 p-2">
               <div className="text-[10px] uppercase tracking-wider text-muted-foreground px-2.5 pt-3 pb-1">views</div>
-              {NAV_ITEMS.map(item => (
+              {PRIMARY_NAV_ITEMS.map(item => (
+                <Tooltip key={item.id}>
+                  <TooltipTrigger asChild>
+                    <button
+                      className={`flex items-center gap-2 w-full px-2.5 py-1.5 rounded-md text-xs transition-colors ${
+                        activeNavId === item.id
+                          ? 'bg-secondary text-foreground'
+                          : 'text-muted-foreground hover:bg-secondary/50 hover:text-foreground'
+                      }`}
+                      onClick={() => handleNavClick(item.id)}
+                    >
+                      {item.icon}
+                      {item.label}
+                      {item.id === 'chat' && gw.backgroundRuns.some(r => r.status === 'running') && (
+                        <Loader2 className="w-3 h-3 ml-auto animate-spin text-muted-foreground" />
+                      )}
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="right" className="text-[10px]">{item.label}</TooltipContent>
+                </Tooltip>
+              ))}
+
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground px-2.5 pt-3 pb-1">advanced</div>
+              {SECONDARY_NAV_ITEMS.map(item => (
                 <Tooltip key={item.id}>
                   <TooltipTrigger asChild>
                     <button
@@ -893,6 +944,17 @@ export default function App() {
           <>
             <ResizableHandle withHandle />
             <ResizablePanel defaultSize="30%" minSize="15%" maxSize="45%" className="overflow-hidden flex flex-col">
+              <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                <div className="text-xs font-medium text-muted-foreground">Explorer</div>
+                <button
+                  className="rounded p-1 text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                  onClick={() => setShowFiles(false)}
+                  title="Hide file explorer"
+                  aria-label="Hide file explorer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
               <Progress items={gw.progress} />
               <FileExplorer
                 rpc={gw.rpc}

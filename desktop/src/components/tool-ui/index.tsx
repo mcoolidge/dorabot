@@ -10,7 +10,7 @@ import { ScreenshotTool } from "./ScreenshotTool"
 import { MessageTool } from "./MessageTool"
 import { BrowserTool } from "./BrowserTool"
 import { CronTool } from "./CronTool"
-import { GoalsTool } from "./GoalsTool"
+import { PlanTool } from "./PlanTool"
 import { TaskTool } from "./TaskTool"
 import { DefaultTool } from "./DefaultTool"
 
@@ -36,15 +36,19 @@ const TOOL_MAP: Record<string, React.ComponentType<ToolUIProps>> = {
   screenshot: ScreenshotTool,
   message: MessageTool,
   browser: BrowserTool,
-  schedule_reminder: CronTool,
-  schedule_recurring: CronTool,
-  schedule_cron: CronTool,
-  list_reminders: CronTool,
-  cancel_reminder: CronTool,
-  goals_view: GoalsTool,
-  goals_add: GoalsTool,
-  goals_update: GoalsTool,
-  goals_propose: GoalsTool,
+  schedule: CronTool,
+  list_schedule: CronTool,
+  update_schedule: CronTool,
+  cancel_schedule: CronTool,
+  goals_view: PlanTool,
+  goals_add: PlanTool,
+  goals_update: PlanTool,
+  goals_delete: PlanTool,
+  tasks_view: PlanTool,
+  tasks_add: PlanTool,
+  tasks_update: PlanTool,
+  tasks_done: PlanTool,
+  tasks_delete: PlanTool,
   Task: TaskTool,
 }
 

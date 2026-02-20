@@ -7,7 +7,7 @@ import { SearchStream } from "./SearchStream"
 import { ScreenshotStream } from "./ScreenshotStream"
 import { FileStream } from "./FileStream"
 import { CronStream } from "./CronStream"
-import { GoalsStream } from "./GoalsStream"
+import { PlanStream } from "./PlanStream"
 import { WebFetchStream } from "./WebFetchStream"
 import { TaskStream } from "./TaskStream"
 import { ResearchStream } from "./ResearchStream"
@@ -26,10 +26,15 @@ const STREAM_MAP: Record<string, React.ComponentType<ToolUIProps>> = {
   list_schedule: CronStream,
   update_schedule: CronStream,
   cancel_schedule: CronStream,
-  goals_view: GoalsStream,
-  goals_add: GoalsStream,
-  goals_update: GoalsStream,
-  goals_propose: GoalsStream,
+  goals_view: PlanStream,
+  goals_add: PlanStream,
+  goals_update: PlanStream,
+  goals_delete: PlanStream,
+  tasks_view: PlanStream,
+  tasks_add: PlanStream,
+  tasks_update: PlanStream,
+  tasks_done: PlanStream,
+  tasks_delete: PlanStream,
   research_view: ResearchStream,
   research_add: ResearchStream,
   research_update: ResearchStream,

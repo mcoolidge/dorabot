@@ -1,378 +1,176 @@
-import { z } from 'zod';
 import { tool } from '@anthropic-ai/claude-agent-sdk';
+import { z } from 'zod';
 import { getDb } from '../db.js';
 
-// ── Types ──
+export type GoalStatus = 'active' | 'paused' | 'done';
 
-export type GoalTask = {
+export type Goal = {
   id: string;
   title: string;
   description?: string;
-  status: 'proposed' | 'approved' | 'in_progress' | 'done' | 'rejected';
-  priority: 'high' | 'medium' | 'low';
-  source: 'agent' | 'user';
+  status: GoalStatus;
+  tags?: string[];
+  reason?: string;
   createdAt: string;
   updatedAt: string;
-  completedAt?: string;
-  result?: string;
-  tags?: string[];
 };
 
-export type Goals = {
-  tasks: GoalTask[];
-  lastPlanAt?: string;
+export type GoalsState = {
+  goals: Goal[];
   version: number;
 };
 
-// ── Goals I/O ──
-
-export function loadGoals(): Goals {
-  const db = getDb();
-  const rows = db.prepare('SELECT data FROM goals_tasks').all() as { data: string }[];
-  const tasks = rows.map(r => JSON.parse(r.data) as GoalTask);
-
-  const versionRow = db.prepare("SELECT value FROM goals_meta WHERE key = 'version'").get() as { value: string } | undefined;
-  const planRow = db.prepare("SELECT value FROM goals_meta WHERE key = 'last_plan_at'").get() as { value: string } | undefined;
-
+function parseGoalRow(raw: string): Goal {
+  const goal = JSON.parse(raw) as Goal;
   return {
-    tasks,
-    version: versionRow ? parseInt(versionRow.value, 10) : 1,
-    lastPlanAt: planRow?.value || undefined,
+    ...goal,
+    status: goal.status || 'active',
+    tags: Array.isArray(goal.tags) ? goal.tags : [],
   };
 }
 
-export function saveGoals(goals: Goals): void {
+function nextId(goals: Goal[]): string {
+  const ids = goals.map(g => Number.parseInt(g.id, 10)).filter(n => Number.isFinite(n));
+  return String((ids.length ? Math.max(...ids) : 0) + 1);
+}
+
+export function loadGoals(): GoalsState {
   const db = getDb();
-  goals.version = (goals.version || 0) + 1;
+  const rows = db.prepare('SELECT data FROM goals').all() as { data: string }[];
+  const goals = rows.map(row => parseGoalRow(row.data));
+  const versionRow = db.prepare("SELECT value FROM goals_meta_v2 WHERE key = 'version'").get() as { value: string } | undefined;
+  return {
+    goals,
+    version: versionRow ? Number.parseInt(versionRow.value, 10) : 1,
+  };
+}
 
-  const run = db.transaction(() => {
-    db.prepare('DELETE FROM goals_tasks').run();
-    const insert = db.prepare('INSERT INTO goals_tasks (id, data) VALUES (?, ?)');
-    for (const task of goals.tasks) {
-      insert.run(task.id, JSON.stringify(task));
-    }
-    db.prepare("INSERT OR REPLACE INTO goals_meta (key, value) VALUES ('version', ?)").run(String(goals.version));
-    if (goals.lastPlanAt) {
-      db.prepare("INSERT OR REPLACE INTO goals_meta (key, value) VALUES ('last_plan_at', ?)").run(goals.lastPlanAt);
-    }
+export function saveGoals(state: GoalsState): void {
+  const db = getDb();
+  state.version = (state.version || 0) + 1;
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM goals').run();
+    const insert = db.prepare('INSERT INTO goals (id, data) VALUES (?, ?)');
+    for (const goal of state.goals) insert.run(goal.id, JSON.stringify(goal));
+    db.prepare("INSERT OR REPLACE INTO goals_meta_v2 (key, value) VALUES ('version', ?)").run(String(state.version));
   });
-  run();
+  tx();
 }
 
-function nextId(goals: Goals): string {
-  const ids = goals.tasks.map(t => parseInt(t.id, 10)).filter(n => !isNaN(n));
-  return String((ids.length > 0 ? Math.max(...ids) : 0) + 1);
+function goalSummary(goal: Goal): string {
+  const tags = goal.tags?.length ? ` [${goal.tags.join(', ')}]` : '';
+  return `#${goal.id} [${goal.status}] ${goal.title}${tags}`;
 }
-
-// ── Markdown serialization (used by system-prompt.ts for display) ──
-
-export function serializeGoals(goals: Goals): string {
-  const lines: string[] = ['# Goals', ''];
-  if (goals.lastPlanAt) {
-    lines.push(`Last planned: ${goals.lastPlanAt}`, '');
-  }
-
-  const columns: Record<string, GoalTask[]> = {
-    proposed: [],
-    approved: [],
-    in_progress: [],
-    done: [],
-    rejected: [],
-  };
-
-  for (const task of goals.tasks) {
-    columns[task.status]?.push(task);
-  }
-
-  const columnLabels: Record<string, string> = {
-    proposed: 'Proposed (awaiting approval)',
-    approved: 'Approved (ready to execute)',
-    in_progress: 'In Progress',
-    done: 'Done',
-    rejected: 'Rejected',
-  };
-
-  for (const [status, label] of Object.entries(columnLabels)) {
-    const tasks = columns[status];
-    if (!tasks || tasks.length === 0) continue;
-
-    lines.push(`## ${label}`, '');
-    for (const task of tasks) {
-      const tags = task.tags?.length ? ` [${task.tags.join(', ')}]` : '';
-      const priority = task.priority !== 'medium' ? ` (${task.priority})` : '';
-      lines.push(`- **#${task.id}** ${task.title}${priority}${tags}`);
-      if (task.description) {
-        lines.push(`  ${task.description}`);
-      }
-      if (task.result) {
-        lines.push(`  Result: ${task.result}`);
-      }
-      lines.push(`  source:${task.source} created:${task.createdAt} updated:${task.updatedAt}${task.completedAt ? ` completed:${task.completedAt}` : ''}`);
-    }
-    lines.push('');
-  }
-
-  return lines.join('\n');
-}
-
-// ── Markdown parsing (used by migration script) ──
-
-export function parseGoals(raw: string): Goals {
-  const goals: Goals = { tasks: [], version: 1 };
-  const lines = raw.split('\n');
-
-  let currentStatus: string | null = null;
-  let currentTask: Partial<GoalTask> | null = null;
-
-  const statusMap: Record<string, string> = {
-    'proposed': 'proposed',
-    'approved': 'approved',
-    'in progress': 'in_progress',
-    'in_progress': 'in_progress',
-    'done': 'done',
-    'rejected': 'rejected',
-  };
-
-  for (const line of lines) {
-    // last planned
-    const planMatch = line.match(/^Last planned:\s*(.+)/);
-    if (planMatch) {
-      goals.lastPlanAt = planMatch[1].trim();
-      continue;
-    }
-
-    // column header
-    const headerMatch = line.match(/^## (.+)/);
-    if (headerMatch) {
-      if (currentTask?.id) {
-        goals.tasks.push(currentTask as GoalTask);
-        currentTask = null;
-      }
-      const headerText = headerMatch[1].toLowerCase();
-      for (const [key, value] of Object.entries(statusMap)) {
-        if (headerText.includes(key)) {
-          currentStatus = value;
-          break;
-        }
-      }
-      continue;
-    }
-
-    // task line
-    const taskMatch = line.match(/^- \*\*#(\d+)\*\*\s+(.+)/);
-    if (taskMatch) {
-      if (currentTask?.id) {
-        goals.tasks.push(currentTask as GoalTask);
-      }
-
-      const titlePart = taskMatch[2];
-      const priorityMatch = titlePart.match(/\(high\)|\(low\)/);
-      const tagsMatch = titlePart.match(/\[([^\]]+)\]/);
-      let title = titlePart
-        .replace(/\s*\(high\)\s*/, ' ')
-        .replace(/\s*\(low\)\s*/, ' ')
-        .replace(/\s*\[[^\]]+\]\s*/, ' ')
-        .trim();
-
-      currentTask = {
-        id: taskMatch[1],
-        title,
-        status: (currentStatus || 'proposed') as GoalTask['status'],
-        priority: priorityMatch ? (priorityMatch[0].replace(/[()]/g, '') as GoalTask['priority']) : 'medium',
-        source: 'agent',
-        tags: tagsMatch ? tagsMatch[1].split(',').map(s => s.trim()) : undefined,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      continue;
-    }
-
-    // metadata line
-    if (currentTask && line.match(/^\s+source:/)) {
-      const sourceMatch = line.match(/source:(\w+)/);
-      const createdMatch = line.match(/created:(\S+)/);
-      const updatedMatch = line.match(/updated:(\S+)/);
-      const completedMatch = line.match(/completed:(\S+)/);
-      if (sourceMatch) currentTask.source = sourceMatch[1] as 'agent' | 'user';
-      if (createdMatch) currentTask.createdAt = createdMatch[1];
-      if (updatedMatch) currentTask.updatedAt = updatedMatch[1];
-      if (completedMatch) currentTask.completedAt = completedMatch[1];
-      continue;
-    }
-
-    // description or result
-    if (currentTask && line.match(/^\s+Result:\s/)) {
-      currentTask.result = line.replace(/^\s+Result:\s*/, '');
-    } else if (currentTask && line.match(/^\s+\S/) && !line.match(/^\s+source:/)) {
-      currentTask.description = (currentTask.description ? currentTask.description + ' ' : '') + line.trim();
-    }
-  }
-
-  if (currentTask?.id) {
-    goals.tasks.push(currentTask as GoalTask);
-  }
-
-  return goals;
-}
-
-// ── MCP Tools ──
 
 export const goalsViewTool = tool(
   'goals_view',
-  'View your goals - shows all tasks organized by status (proposed, approved, in_progress, done). Use this to see what needs to be done.',
+  'View goals and their status.',
   {
-    status: z.enum(['all', 'proposed', 'approved', 'in_progress', 'done', 'rejected']).optional()
-      .describe('Filter by status. Default: all active (excludes done/rejected)'),
+    status: z.enum(['all', 'active', 'paused', 'done']).optional(),
+    id: z.string().optional(),
   },
   async (args) => {
-    const goals = loadGoals();
-    const filter = args.status || 'all';
+    const state = loadGoals();
 
-    let tasks = goals.tasks;
-    if (filter === 'all') {
-      tasks = tasks.filter(t => !['done', 'rejected'].includes(t.status));
-    } else {
-      tasks = tasks.filter(t => t.status === filter);
+    if (args.id) {
+      const goal = state.goals.find(g => g.id === args.id);
+      if (!goal) return { content: [{ type: 'text', text: `Goal #${args.id} not found` }], isError: true };
+      const lines = [
+        goalSummary(goal),
+        goal.description ? `Description: ${goal.description}` : '',
+        goal.reason ? `Reason: ${goal.reason}` : '',
+        goal.tags?.length ? `Tags: ${goal.tags.join(', ')}` : '',
+      ].filter(Boolean);
+      return { content: [{ type: 'text', text: lines.join('\n') }] };
     }
 
-    if (tasks.length === 0) {
-      return { content: [{ type: 'text', text: filter === 'all' ? 'No active goals.' : `No goals with status: ${filter}` }] };
+    const status = args.status || 'all';
+    const goals = status === 'all' ? state.goals : state.goals.filter(g => g.status === status);
+    if (!goals.length) {
+      return { content: [{ type: 'text', text: status === 'all' ? 'No goals.' : `No goals with status: ${status}` }] };
     }
-
-    const formatted = tasks.map(t => {
-      const tags = t.tags?.length ? ` [${t.tags.join(', ')}]` : '';
-      const desc = t.description ? `\n  ${t.description}` : '';
-      const result = t.result ? `\n  Result: ${t.result}` : '';
-      return `#${t.id} [${t.status}] ${t.priority === 'medium' ? '' : `(${t.priority}) `}${t.title}${tags}${desc}${result}`;
-    }).join('\n\n');
-
-    return {
-      content: [{ type: 'text', text: `Goals (${tasks.length} tasks):\n\n${formatted}` }],
-    };
-  }
+    const lines = goals
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .map(goalSummary)
+      .join('\n');
+    return { content: [{ type: 'text', text: `Goals (${goals.length}):\n\n${lines}` }] };
+  },
 );
 
 export const goalsAddTool = tool(
   'goals_add',
-  'Add a goal. Agent-proposed goals start as "proposed" (need user approval). User-requested goals start as "approved".',
+  'Create a goal.',
   {
-    title: z.string().describe('Short goal title'),
-    description: z.string().optional().describe('Detailed description of what needs to be done'),
-    priority: z.enum(['high', 'medium', 'low']).optional().describe('Goal priority. Default: medium'),
-    source: z.enum(['agent', 'user']).optional().describe('Who created this goal. Default: agent'),
-    status: z.enum(['proposed', 'approved']).optional().describe('Initial status. Agent goals default to proposed, user goals to approved'),
-    tags: z.array(z.string()).optional().describe('Tags for categorization'),
+    title: z.string(),
+    description: z.string().optional(),
+    tags: z.array(z.string()).optional(),
   },
   async (args) => {
-    const goals = loadGoals();
-    const source = args.source || 'agent';
-    const status = args.status || (source === 'user' ? 'approved' : 'proposed');
+    const state = loadGoals();
     const now = new Date().toISOString();
-
-    const task: GoalTask = {
-      id: nextId(goals),
+    const goal: Goal = {
+      id: nextId(state.goals),
       title: args.title,
       description: args.description,
-      status,
-      priority: args.priority || 'medium',
-      source,
+      status: 'active',
+      tags: args.tags || [],
       createdAt: now,
       updatedAt: now,
-      tags: args.tags,
     };
-
-    goals.tasks.push(task);
-    saveGoals(goals);
-
-    return {
-      content: [{ type: 'text', text: `Goal #${task.id} added: "${task.title}" [${task.status}]` }],
-    };
-  }
+    state.goals.push(goal);
+    saveGoals(state);
+    return { content: [{ type: 'text', text: `Goal #${goal.id} created: ${goal.title}` }] };
+  },
 );
 
 export const goalsUpdateTool = tool(
   'goals_update',
-  'Update a goal. Use to change status, add results, or modify details.',
+  'Update goal fields.',
   {
-    id: z.string().describe('Goal ID (number)'),
-    status: z.enum(['proposed', 'approved', 'in_progress', 'done', 'rejected']).optional()
-      .describe('New status'),
-    result: z.string().optional().describe('Result or outcome of the goal'),
-    title: z.string().optional().describe('Updated title'),
-    description: z.string().optional().describe('Updated description'),
-    priority: z.enum(['high', 'medium', 'low']).optional().describe('Updated priority'),
+    id: z.string(),
+    title: z.string().optional(),
+    description: z.string().optional(),
+    status: z.enum(['active', 'paused', 'done']).optional(),
+    tags: z.array(z.string()).optional(),
+    reason: z.string().optional(),
   },
   async (args) => {
-    const goals = loadGoals();
-    const task = goals.tasks.find(t => t.id === args.id);
-    if (!task) {
-      return { content: [{ type: 'text', text: `Goal #${args.id} not found` }], isError: true };
-    }
+    const state = loadGoals();
+    const goal = state.goals.find(g => g.id === args.id);
+    if (!goal) return { content: [{ type: 'text', text: `Goal #${args.id} not found` }], isError: true };
 
-    const now = new Date().toISOString();
-    if (args.status) task.status = args.status;
-    if (args.result) task.result = args.result;
-    if (args.title) task.title = args.title;
-    if (args.description) task.description = args.description;
-    if (args.priority) task.priority = args.priority;
-    task.updatedAt = now;
-
-    if (args.status === 'done') {
-      task.completedAt = now;
-    }
-
-    saveGoals(goals);
-
-    return {
-      content: [{ type: 'text', text: `Goal #${task.id} updated: "${task.title}" [${task.status}]${args.result ? ` - ${args.result}` : ''}` }],
-    };
-  }
+    if (args.title !== undefined) goal.title = args.title;
+    if (args.description !== undefined) goal.description = args.description;
+    if (args.status !== undefined) goal.status = args.status;
+    if (args.tags !== undefined) goal.tags = args.tags;
+    if (args.reason !== undefined) goal.reason = args.reason;
+    goal.updatedAt = new Date().toISOString();
+    saveGoals(state);
+    return { content: [{ type: 'text', text: `Goal #${goal.id} updated` }] };
+  },
 );
 
-export const goalsBatchProposeTool = tool(
-  'goals_propose',
-  'Propose multiple goals at once for user approval. Used during planning cycles to batch-propose work.',
+export const goalsDeleteTool = tool(
+  'goals_delete',
+  'Delete a goal.',
   {
-    tasks: z.array(z.object({
-      title: z.string(),
-      description: z.string().optional(),
-      priority: z.enum(['high', 'medium', 'low']).optional(),
-      tags: z.array(z.string()).optional(),
-    })).describe('Array of goals to propose'),
+    id: z.string(),
   },
   async (args) => {
-    const goals = loadGoals();
-    const now = new Date().toISOString();
-    const added: string[] = [];
-
-    for (const t of args.tasks) {
-      const task: GoalTask = {
-        id: nextId(goals),
-        title: t.title,
-        description: t.description,
-        status: 'proposed',
-        priority: t.priority || 'medium',
-        source: 'agent',
-        createdAt: now,
-        updatedAt: now,
-        tags: t.tags,
-      };
-      goals.tasks.push(task);
-      added.push(`#${task.id}: ${task.title}`);
+    const state = loadGoals();
+    const before = state.goals.length;
+    state.goals = state.goals.filter(g => g.id !== args.id);
+    if (state.goals.length === before) {
+      return { content: [{ type: 'text', text: `Goal #${args.id} not found` }], isError: true };
     }
-
-    goals.lastPlanAt = now;
-    saveGoals(goals);
-
-    return {
-      content: [{ type: 'text', text: `Proposed ${added.length} goals:\n${added.join('\n')}` }],
-    };
-  }
+    saveGoals(state);
+    return { content: [{ type: 'text', text: `Goal #${args.id} deleted` }] };
+  },
 );
 
 export const goalsTools = [
   goalsViewTool,
   goalsAddTool,
   goalsUpdateTool,
-  goalsBatchProposeTool,
+  goalsDeleteTool,
 ];

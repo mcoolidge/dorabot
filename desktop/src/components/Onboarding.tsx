@@ -15,9 +15,11 @@ import {
   Eye, EyeOff, Globe, User, Smartphone,
 } from 'lucide-react';
 
+type ProfileData = { name?: string; timezone?: string };
+
 type Props = {
   gateway: ReturnType<typeof useGateway>;
-  onComplete: (launchOnboard?: boolean) => void;
+  onComplete: (launchOnboard?: boolean, profileData?: ProfileData) => void;
 };
 
 type ProviderChoice = {
@@ -30,7 +32,7 @@ type DetectResult = {
   codex: { installed: boolean; hasAuth: boolean };
 };
 
-type Step = 'welcome' | 'detecting' | 'ready' | 'choose' | 'auth' | 'auth-success' | 'profile' | 'channels' | 'permissions' | 'tour' | 'launch';
+type Step = 'welcome' | 'detecting' | 'choose' | 'auth' | 'auth-success' | 'profile' | 'channels' | 'permissions' | 'tour' | 'launch';
 
 const isMac = (window as any).electronAPI?.platform === 'darwin';
 
@@ -74,7 +76,7 @@ const PHASE_LABELS = ['connect', 'profile', 'channels', 'setup', 'go'];
 
 function PhaseBar({ step }: { step: Step }) {
   const phaseMap: Record<Step, number> = {
-    welcome: 0, detecting: 0, ready: 0, choose: 0, auth: 0, 'auth-success': 0,
+    welcome: 0, detecting: 0, choose: 0, auth: 0, 'auth-success': 0,
     profile: 1, channels: 2, permissions: 3, tour: 3, launch: 4,
   };
   const active = phaseMap[step] ?? 0;
@@ -136,9 +138,21 @@ export function OnboardingOverlay({ gateway, onComplete }: Props) {
     goTo('profile');
   }, [goTo]);
 
+  const saveProfile = useCallback(() => {
+    const name = profileName.trim();
+    const tz = profileTimezone.trim();
+    if (name) {
+      gateway.setConfig('userName', name).catch(() => {});
+    }
+    if (tz) {
+      gateway.setConfig('userTimezone', tz).catch(() => {});
+    }
+  }, [gateway, profileName, profileTimezone]);
+
   const goAfterProfile = useCallback(() => {
+    saveProfile();
     goTo('channels');
-  }, [goTo]);
+  }, [goTo, saveProfile]);
 
   const goAfterChannels = useCallback(() => {
     if (isMac) {
@@ -252,12 +266,6 @@ export function OnboardingOverlay({ gateway, onComplete }: Props) {
                 </PageTransition>
               )}
 
-              {step === 'ready' && (
-                <PageTransition key="ready" direction={direction}>
-                  <ReadyStep authInfo={authInfo} />
-                </PageTransition>
-              )}
-
               {step === 'choose' && (
                 <PageTransition key="choose" direction={direction}>
                   <ChooseStep
@@ -295,6 +303,7 @@ export function OnboardingOverlay({ gateway, onComplete }: Props) {
                     onTimezoneChange={setProfileTimezone}
                     onContinue={goAfterProfile}
                     onSkip={goAfterProfile}
+                    onBack={() => goTo('choose', -1)}
                   />
                 </PageTransition>
               )}
@@ -332,8 +341,8 @@ export function OnboardingOverlay({ gateway, onComplete }: Props) {
                 <PageTransition key="launch" direction={direction}>
                   <LaunchStep
                     name={profileName}
-                    onLaunch={() => onComplete(true)}
-                    onSkip={() => onComplete(false)}
+                    onLaunch={() => onComplete(true, { name: profileName, timezone: profileTimezone })}
+                    onSkip={() => onComplete(false, { name: profileName, timezone: profileTimezone })}
                   />
                 </PageTransition>
               )}
@@ -368,9 +377,9 @@ function WelcomeStep({ onContinue }: { onContinue: () => void }) {
       >
         <h1 className="text-xl font-bold text-foreground">Welcome to dorabot</h1>
         <p className="text-sm text-muted-foreground">
-          Your personal AI assistant that can{' '}
+          Your AI workspace that can{' '}
           <FlipWords
-            words={['code for you', 'manage your inbox', 'automate tasks', 'browse the web', 'remember everything']}
+            words={['ship code for you', 'research competitors', 'run background tasks', 'browse the web', 'remember everything']}
             duration={2500}
             className="text-primary font-semibold"
           />
@@ -410,23 +419,6 @@ function DetectingStep() {
         words="Checking for existing credentials..."
         className="text-[11px] text-muted-foreground text-center"
       />
-    </div>
-  );
-}
-
-function ReadyStep({ authInfo }: { authInfo: { method?: string; identity?: string } | null }) {
-  const label = authInfo?.identity || (authInfo?.method === 'oauth' ? 'Claude subscription' : 'API key');
-  return (
-    <div className="flex flex-col items-center gap-3 py-8">
-      <motion.div
-        className="w-12 h-12 rounded-full bg-success/20 flex items-center justify-center"
-        initial={{ scale: 0 }}
-        animate={{ scale: 1 }}
-        transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-      >
-        <Check className="w-6 h-6 text-success" />
-      </motion.div>
-      <div className="text-sm font-semibold text-foreground">connected via {label}</div>
     </div>
   );
 }
@@ -619,6 +611,7 @@ function ProfileStep({
   onTimezoneChange,
   onContinue,
   onSkip,
+  onBack,
 }: {
   name: string;
   timezone: string;
@@ -626,6 +619,7 @@ function ProfileStep({
   onTimezoneChange: (v: string) => void;
   onContinue: () => void;
   onSkip: () => void;
+  onBack?: () => void;
 }) {
   const nameRef = useRef<HTMLInputElement>(null);
 
@@ -686,12 +680,22 @@ function ProfileStep({
           continue
           <ChevronRight className="w-3.5 h-3.5" />
         </Button>
-        <button
-          onClick={onSkip}
-          className="w-full text-center text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-        >
-          skip for now
-        </button>
+        <div className="flex items-center justify-between">
+          {onBack ? (
+            <button
+              onClick={onBack}
+              className="text-[10px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+            >
+              <ChevronLeft className="w-3 h-3" /> back
+            </button>
+          ) : <span />}
+          <button
+            onClick={onSkip}
+            className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+          >
+            skip for now
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1164,7 +1168,7 @@ const TOUR_FEATURES = [
   {
     icon: LayoutGrid,
     title: 'Goals',
-    description: 'Track outcomes and let the agent help execute.',
+    description: 'Track goals and tasks, approve plans, and execute.',
     color: 'text-success',
   },
   {

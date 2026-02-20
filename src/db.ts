@@ -48,15 +48,45 @@ export function getDb(): Database.Database {
       data TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS goals_tasks (
+    CREATE TABLE IF NOT EXISTS goals (
       id TEXT PRIMARY KEY,
       data TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS goals_meta (
+    CREATE TABLE IF NOT EXISTS goals_meta_v2 (
       key TEXT PRIMARY KEY,
       value TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      data TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS tasks_meta (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS tasks_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      task_id TEXT,
+      event_type TEXT,
+      message TEXT,
+      data TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tasks_logs_task_id ON tasks_logs(task_id);
+
+    -- reset deprecated planning tables (plans/ideas and pre-v2 goals schema)
+    DROP TABLE IF EXISTS plans_tasks;
+    DROP TABLE IF EXISTS plans_meta;
+    DROP TABLE IF EXISTS plans_logs;
+    DROP TABLE IF EXISTS ideas;
+    DROP TABLE IF EXISTS ideas_meta;
+    DROP TABLE IF EXISTS goals_tasks;
+    DROP TABLE IF EXISTS goals_meta;
 
     -- append-only event log for WebSocket stream replay on reconnect
     CREATE TABLE IF NOT EXISTS stream_events (

@@ -4,6 +4,7 @@ import { calendarTools } from './calendar.js';
 import { screenshotTool } from './screenshot.js';
 import { browserTool } from './browser.js';
 import { goalsTools } from './goals.js';
+import { tasksTools } from './tasks.js';
 import { researchTools } from './research.js';
 import { memoryTools } from './memory.js';
 
@@ -11,7 +12,21 @@ export { messageTool, registerChannelHandler, getChannelHandler, type ChannelHan
 export { setScheduler, getScheduler } from './calendar.js';
 export { screenshotTool } from './screenshot.js';
 export { browserTool, setBrowserConfig } from './browser.js';
-export { loadGoals, saveGoals, type Goals, type GoalTask } from './goals.js';
+export { loadGoals, saveGoals, type Goal, type GoalStatus, type GoalsState } from './goals.js';
+export {
+  loadTasks,
+  saveTasks,
+  appendTaskLog,
+  readTaskLogs,
+  getTaskPlanPath,
+  ensureTaskPlanDoc,
+  readTaskPlanDoc,
+  writeTaskPlanDoc,
+  getTaskPlanContent,
+  type Task,
+  type TaskStatus,
+  type TasksState,
+} from './tasks.js';
 export { loadResearch, saveResearch, type Research, type ResearchItem } from './research.js';
 
 // all custom tools for this agent
@@ -21,6 +36,7 @@ const customTools = [
   browserTool,
   ...calendarTools,
   ...goalsTools,
+  ...tasksTools,
   ...researchTools,
   ...memoryTools,
 ];
@@ -32,4 +48,3 @@ export function createAgentMcpServer() {
     tools: customTools,
   });
 }
-

@@ -33,6 +33,7 @@ function cleanEnvForSdk(): Record<string, string> {
     if (key.startsWith('VSCODE_')) continue;
     if (key === 'GIT_ASKPASS') continue;
     if (key === 'ELECTRON_RUN_AS_NODE') continue;
+    if (key === 'CLAUDECODE') continue;
     env[key] = val;
   }
   // use a clean tmpdir so SDK file watcher doesn't hit socket files
@@ -47,6 +48,7 @@ export type AgentOptions = {
   sessionId?: string;
   resumeId?: string;
   config: Config;
+  cwd?: string;
   channel?: string;
   connectedChannels?: { channel: string; chatId: string }[];
   timezone?: string;
@@ -82,6 +84,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     sessionId: providedSessionId,
     resumeId,
     config,
+    cwd,
     channel,
     timezone,
     ownerIdentity,
@@ -157,7 +160,7 @@ export async function runAgent(opts: AgentOptions): Promise<AgentResult> {
     config,
     channel,
     resumeId,
-    cwd: config.cwd,
+    cwd: cwd || config.cwd,
     env: cleanEnvForSdk(),
     maxTurns: config.maxTurns ?? undefined,
     canUseTool: opts.canUseTool,
@@ -268,6 +271,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     sessionId: providedSessionId,
     resumeId,
     config,
+    cwd,
     channel,
     timezone,
     ownerIdentity,
@@ -331,7 +335,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
     config,
     channel,
     resumeId,
-    cwd: config.cwd,
+    cwd: cwd || config.cwd,
     env: cleanEnvForSdk(),
     maxTurns: config.maxTurns ?? undefined,
     canUseTool: opts.canUseTool,
