@@ -45,6 +45,7 @@ function cleanEnvForSdk(): Record<string, string> {
 
 export type AgentOptions = {
   prompt: string;
+  images?: import('./providers/types.js').ImageAttachment[];
   sessionId?: string;
   resumeId?: string;
   config: Config;
@@ -330,6 +331,7 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
   console.log(`[agent] streamAgent starting: provider=${provider.name} model=${config.model} permissionMode=${config.permissionMode} sessionId=${sessionId} resumeId=${resumeId || 'none'} sandbox=${effectiveSandbox.enabled ? 'on' : 'off'} channel=${channel || 'desktop'} mcpServers=${Object.keys(allMcpServers).join(',')}`);
   const q = provider.query({
     prompt: enhancedPrompt,
+    images: opts.images,
     systemPrompt,
     model: config.model,
     config,
@@ -353,10 +355,17 @@ export async function* streamAgent(opts: AgentOptions): AsyncGenerator<unknown, 
   let usedMessageTool = false;
 
   // always store user message to our session log
+  const userContentBlocks: Array<Record<string, unknown>> = [];
+  if (opts.images?.length) {
+    for (const img of opts.images) {
+      userContentBlocks.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
+    }
+  }
+  userContentBlocks.push({ type: 'text', text: messageMetadata?.body || prompt });
   const userMsg: SessionMessage = {
     type: 'user',
     timestamp: new Date().toISOString(),
-    content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: messageMetadata?.body || prompt }] } },
+    content: { type: 'user', message: { role: 'user', content: userContentBlocks } },
     metadata: messageMetadata,
   };
   messages.push(userMsg);

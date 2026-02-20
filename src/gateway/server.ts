@@ -2112,6 +2112,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
   async function handleAgentRun(params: {
     prompt: string;
+    images?: Array<{ data: string; mediaType: string }>;
     sessionKey: string;
     source: string;
     channel?: string;
@@ -2119,7 +2120,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     extraContext?: string;
     messageMetadata?: import('../session/manager.js').MessageMetadata;
   }): Promise<AgentResult | null> {
-    const { prompt, sessionKey, source, channel, cwd, extraContext, messageMetadata } = params;
+    const { prompt, images, sessionKey, source, channel, cwd, extraContext, messageMetadata } = params;
     console.log(`[gateway] agent run: source=${source} sessionKey=${sessionKey} prompt="${prompt.slice(0, 80)}..."`);
 
     // pre-run auth check: if dorabot_oauth token is expired, don't waste a run
@@ -2175,6 +2176,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         const lastPulseAt = pulseItem?.lastRunAt ? new Date(pulseItem.lastRunAt).getTime() : undefined;
         const gen = streamAgent({
           prompt,
+          images,
           sessionId: session?.sessionId,
           resumeId,
           config,
@@ -2854,6 +2856,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
         case 'chat.send': {
           const prompt = params?.prompt as string;
+          const images = params?.images as Array<{ data: string; mediaType: string }> | undefined;
           if (!prompt) return { id, error: 'prompt required' };
 
           const chatId = (params?.chatId as string) || randomUUID();
@@ -2884,12 +2887,19 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           // try injection into active run first
           const handle = runHandles.get(sessionKey);
           if (handle?.active) {
-            handle.inject(prompt);
+            handle.inject(prompt, images);
             // record injected user message in session (CLI doesn't echo user text back)
+            const injectedContent: Array<Record<string, unknown>> = [];
+            if (images?.length) {
+              for (const img of images) {
+                injectedContent.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
+              }
+            }
+            injectedContent.push({ type: 'text', text: prompt });
             fileSessionManager.append(session.sessionId, {
               type: 'user',
               timestamp: new Date().toISOString(),
-              content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } },
+              content: { type: 'user', message: { role: 'user', content: injectedContent } },
             });
             broadcast({ event: 'agent.user_message', data: {
               source: 'desktop/chat', sessionKey, prompt, injected: true, timestamp: Date.now(),
@@ -2900,6 +2910,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           // no active session — start new run
           handleAgentRun({
             prompt,
+            images,
             sessionKey,
             source: 'desktop/chat',
           });
