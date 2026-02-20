@@ -483,6 +483,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   const MAX_TRACKED_SEQS = 100000;
   // Callback ref for tab system to be notified of sessionId changes
   const onSessionIdChangeRef = useRef<((sessionKey: string, sessionId: string) => void) | null>(null);
+  const onFirstMessageRef = useRef<((sessionKey: string, preview: string) => void) | null>(null);
   const onNotifiableEventRef = useRef<((event: NotifiableEvent) => void) | null>(null);
 
   const markSeqIfNew = useCallback((seq: number, sessionKey?: string): boolean => {
@@ -1354,6 +1355,10 @@ export function useGateway(url = 'wss://localhost:18789') {
     // Optimistic update: add user message and set status
     setSessionStates(prev => {
       const state = prev[sk] || { ...DEFAULT_SESSION_STATE };
+      const isFirst = !state.chatItems.some(i => i.type === 'user');
+      if (isFirst && onFirstMessageRef.current) {
+        onFirstMessageRef.current(sk, prompt.slice(0, 80));
+      }
       return {
         ...prev,
         [sk]: {
@@ -1725,6 +1730,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     setActiveSession,
     loadSessionIntoMap,
     onSessionIdChangeRef,
+    onFirstMessageRef,
     onNotifiableEventRef,
     // Global state
     channelMessages,

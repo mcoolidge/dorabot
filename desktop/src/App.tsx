@@ -324,7 +324,7 @@ export default function App() {
     const cid = chatId || sessionId;
     const sessionKey = `${ch}:${ct}:${cid}`;
     const session = gw.sessions.find(s => s.id === sessionId);
-    const label = session?.senderName || session?.chatId || sessionId.slice(8, 16);
+    const label = session?.senderName || session?.preview || sessionId.slice(8, 16);
 
     tabState.openChatTab({
       sessionId,
@@ -532,18 +532,8 @@ export default function App() {
     onSwitchChannel: setSelectedChannel,
     onClearSelectedFile: () => setSelectedFile(null),
     onSetupChat: (prompt: string) => {
-      // Create/focus a chat tab in THIS group, then send
-      const group = layout.groups.find(g => g.id === groupId);
-      const existingChat = group?.tabIds
-        .map(id => tabState.tabs.find(t => t.id === id))
-        .find((t): t is Extract<Tab, { type: 'chat' }> => Boolean(t && isChatTab(t)));
-      if (existingChat) {
-        tabState.focusTab(existingChat.id, groupId);
-        setTimeout(() => gw.sendMessage(prompt, existingChat.sessionKey, existingChat.chatId), 0);
-      } else {
-        const created = tabState.newChatTab(groupId);
-        setTimeout(() => gw.sendMessage(prompt, created.sessionKey, created.chatId), 0);
-      }
+      const created = tabState.newChatTab(groupId);
+      setTimeout(() => gw.sendMessage(prompt, created.sessionKey, created.chatId), 0);
     },
     onNavClick: (navId: string) => handleNavClick(navId as TabType),
   }), [tabState, gw, selectedFile, selectedChannel, layout, handleNavClick, handleViewSession, draggingTab]);

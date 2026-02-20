@@ -206,6 +206,21 @@ export function useTabs(gw: ReturnType<typeof useGateway>, layout: ReturnType<ty
     };
   }, [gw.onSessionIdChangeRef]);
 
+  // Update tab label with first message preview
+  useEffect(() => {
+    gw.onFirstMessageRef.current = (sessionKey: string, preview: string) => {
+      setTabs(prev => prev.map(tab => {
+        if (isChatTab(tab) && tab.sessionKey === sessionKey && tab.label === 'new task') {
+          return { ...tab, label: preview };
+        }
+        return tab;
+      }));
+    };
+    return () => {
+      gw.onFirstMessageRef.current = null;
+    };
+  }, [gw.onFirstMessageRef]);
+
   // Persist tabs
   useEffect(() => {
     localStorage.setItem(TABS_STORAGE_KEY, JSON.stringify(tabs));
