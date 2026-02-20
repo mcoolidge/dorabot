@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'n
 import { execFile, execSync } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
 import type { Provider, ProviderRunOptions, ProviderMessage, ProviderAuthStatus, ProviderQueryResult, RunHandle } from './types.js';
+import { guardImages } from './image-guard.js';
 import { DORABOT_DIR, CLAUDE_KEY_PATH, CLAUDE_OAUTH_PATH } from '../workspace.js';
 import { getSecretStorageBackend, keychainDelete, keychainLoad, keychainStore, type SecretStorageBackend } from '../auth/keychain.js';
 
@@ -588,8 +589,12 @@ export class ClaudeProvider implements Provider {
     const makeUserMsg = (text: string, images?: import('./types.js').ImageAttachment[]): UserMsg => {
       const content: ContentBlock[] = [];
       if (images?.length) {
-        for (const img of images) {
+        const { valid, warnings } = guardImages(images);
+        for (const img of valid) {
           content.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
+        }
+        if (warnings.length) {
+          text += '\n\n[Image warning: ' + warnings.join('; ') + ']';
         }
       }
       content.push({ type: 'text', text });
