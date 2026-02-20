@@ -702,7 +702,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
           return (
             <div key={i} className="flex items-center gap-2 text-[10px] text-muted-foreground py-0.5">
               <MessageCircle className="w-3 h-3" />
-              <span>{item.streaming ? 'asking...' : item.output ? 'answered' : 'waiting for answer'}</span>
+              <span className="truncate max-w-xs">{item.streaming ? 'asking...' : item.output ? item.output : 'waiting for answer'}</span>
             </div>
           );
         }

@@ -1453,12 +1453,19 @@ export function useGateway(url = 'wss://localhost:18789') {
       console.error('failed to answer question:', err);
     }
     const sk = sessionKey || activeSessionKeyRef.current;
+    // Build a readable summary from the answers
+    const answerSummary = (() => {
+      const entries = Object.entries(answers).filter(([, v]) => v);
+      if (entries.length === 0) return 'answered';
+      if (entries.length === 1) return entries[0][1];
+      return entries.map(([, v]) => v).join(', ');
+    })();
     setSessionStates(prev => {
       const state = prev[sk];
       if (!state) return prev;
       const chatItems = state.chatItems.map(it =>
         it.type === 'tool_use' && it.name === 'AskUserQuestion' && it.streaming
-          ? { ...it, streaming: false }
+          ? { ...it, streaming: false, output: answerSummary }
           : it
       );
       return { ...prev, [sk]: { ...state, chatItems, pendingQuestion: null, ...(success ? { agentStatus: 'thinking...' } : {}) } };
