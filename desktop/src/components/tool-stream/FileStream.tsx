@@ -1,3 +1,4 @@
+import { useMemo } from "react"
 import { motion, AnimatePresence } from "motion/react"
 import { FileText, FilePlus, Pencil, FolderSearch, FileSearch } from "lucide-react"
 import type { ToolUIProps } from "../tool-ui"
@@ -10,6 +11,46 @@ const TOOL_META: Record<string, { icon: typeof FileText; verb: string; color: st
   Glob:  { icon: FolderSearch, verb: "searching",  color: "text-primary" },
   Grep:  { icon: FileSearch,  verb: "searching",  color: "text-primary" },
 }
+
+type DiffLine = { type: "ctx" | "del" | "add"; line: string }
+
+function computeDiff(oldStr: string, newStr: string): DiffLine[] {
+  const oldLines = oldStr.split("\n")
+  const newLines = newStr.split("\n")
+  const m = oldLines.length
+  const n = newLines.length
+
+  // LCS DP
+  const dp: number[][] = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0))
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = oldLines[i - 1] === newLines[j - 1]
+        ? dp[i - 1][j - 1] + 1
+        : Math.max(dp[i - 1][j], dp[i][j - 1])
+
+  // backtrack
+  const result: DiffLine[] = []
+  let i = m, j = n
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+      result.push({ type: "ctx", line: oldLines[i - 1] })
+      i--; j--
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      result.push({ type: "add", line: newLines[j - 1] })
+      j--
+    } else {
+      result.push({ type: "del", line: oldLines[i - 1] })
+      i--
+    }
+  }
+  return result.reverse()
+}
+
+const DIFF_STYLES = {
+  del: { bg: "diff-line-del", text: "text-destructive", gutter: "text-destructive/60", prefix: "\u2212" },
+  add: { bg: "diff-line-add", text: "text-success", gutter: "text-success/60", prefix: "+" },
+  ctx: { bg: "", text: "text-muted-foreground/60", gutter: "text-muted-foreground/25", prefix: " " },
+} as const
 
 function filename(path: string): string {
   return path.split("/").pop() || path
@@ -73,47 +114,8 @@ export function FileStream({ name, input, output, isError, streaming }: ToolUIPr
         </div>
       )}
 
-      {/* edit diff view */}
-      {isEdit && (oldStr || newStr) && (
-        <div className="grid grid-cols-2 gap-0">
-          <motion.div
-            className="border-r border-border/20 px-2 py-2 max-h-[140px] overflow-auto"
-            initial={{ opacity: 0, x: -8 }}
-            animate={{ opacity: 1, x: 0 }}
-          >
-            <div className="text-[8px] uppercase text-destructive/50 mb-1 tracking-wider">removed</div>
-            {oldStr.split("\n").map((line: string, i: number) => (
-              <div key={i} className="flex gap-2 text-[10px] leading-5">
-                <span className="text-destructive/30 w-4 text-right select-none shrink-0">{i + 1}</span>
-                <span className="text-destructive/70 bg-destructive/5 px-1 -mx-1 rounded whitespace-pre-wrap break-all">{line}</span>
-              </div>
-            ))}
-          </motion.div>
-          <motion.div
-            className="px-2 py-2 max-h-[140px] overflow-auto"
-            initial={{ opacity: 0, x: 8 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.1 }}
-          >
-            <div className="text-[8px] uppercase text-success/50 mb-1 tracking-wider">added</div>
-            {newStr.split("\n").map((line: string, i: number) => (
-              <div key={i} className="flex gap-2 text-[10px] leading-5">
-                <span className="text-success/30 w-4 text-right select-none shrink-0">{i + 1}</span>
-                <span className="text-success/70 bg-success/5 px-1 -mx-1 rounded whitespace-pre-wrap break-all">
-                  {line}
-                  {streaming && i === newStr.split("\n").length - 1 && (
-                    <motion.span
-                      className="inline-block w-[2px] h-3 bg-success/60 ml-0.5 align-middle"
-                      animate={{ opacity: [1, 0] }}
-                      transition={{ duration: 0.5, repeat: Infinity }}
-                    />
-                  )}
-                </span>
-              </div>
-            ))}
-          </motion.div>
-        </div>
-      )}
+      {/* edit unified diff */}
+      {isEdit && (oldStr || newStr) && <EditDiff oldStr={oldStr} newStr={newStr} streaming={streaming} />}
 
       {/* search pattern for Glob/Grep */}
       {(isGlob || isGrep) && command && !isEdit && (
@@ -198,5 +200,46 @@ export function FileStream({ name, input, output, isError, streaming }: ToolUIPr
         )}
       </AnimatePresence>
     </div>
+  )
+}
+
+function EditDiff({ oldStr, newStr, streaming }: { oldStr: string; newStr: string; streaming?: boolean }) {
+  const lines = useMemo(() => computeDiff(oldStr, newStr), [oldStr, newStr])
+
+  let oldNum = 0, newNum = 0
+  return (
+    <motion.div
+      className="px-1 py-1.5 max-h-[200px] overflow-auto"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+    >
+      {lines.map((d, i) => {
+        if (d.type === "del" || d.type === "ctx") oldNum++
+        if (d.type === "add" || d.type === "ctx") newNum++
+        const s = DIFF_STYLES[d.type]
+        const isLast = i === lines.length - 1
+        return (
+          <div key={i} className={`flex text-[10px] leading-5 rounded-sm ${s.bg}`}>
+            <span className={`w-7 text-right select-none shrink-0 pr-1 ${s.gutter}`}>
+              {d.type !== "add" ? oldNum : ""}
+            </span>
+            <span className={`w-7 text-right select-none shrink-0 pr-1 border-r border-border/15 mr-1 ${s.gutter}`}>
+              {d.type !== "del" ? newNum : ""}
+            </span>
+            <span className={`w-3 select-none shrink-0 text-center ${s.gutter}`}>{s.prefix}</span>
+            <span className={`whitespace-pre-wrap break-all px-1 ${s.text}`}>
+              {d.line || "\u00A0"}
+              {streaming && isLast && d.type === "add" && (
+                <motion.span
+                  className="inline-block w-[2px] h-3 bg-success/60 ml-0.5 align-middle"
+                  animate={{ opacity: [1, 0] }}
+                  transition={{ duration: 0.5, repeat: Infinity }}
+                />
+              )}
+            </span>
+          </div>
+        )
+      })}
+    </motion.div>
   )
 }

@@ -202,6 +202,45 @@
   border-radius: 1px;
 }
 
+/* diff line backgrounds */
+.diff-line-del {
+  background: oklch(0.55 0.20 27 / 0.12);
+}
+.diff-line-add {
+  background: oklch(0.55 0.20 145 / 0.12);
+}
+.dark .diff-line-del {
+  background: oklch(0.65 0.24 27 / 0.15);
+}
+.dark .diff-line-add {
+  background: oklch(0.70 0.24 145 / 0.15);
+}
+
+/* thinking container */
+.thinking-container {
+  position: relative;
+  border-left: 2px solid hsl(var(--muted-foreground) / 0.15);
+  padding-left: 12px;
+}
+.thinking-body {
+  max-height: 200px;
+  overflow-y: auto;
+  position: relative;
+  padding: 6px 0;
+  scrollbar-width: none;
+}
+.thinking-body-faded {
+  mask-image: linear-gradient(to bottom, black 0%, black 75%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black 0%, black 75%, transparent 100%);
+}
+.thinking-body::-webkit-scrollbar {
+  display: none;
+}
+.thinking-body .streaming-cursor {
+  height: 10px;
+  width: 5px;
+}
+
 /* prose styles for markdown in chat */
 .prose-chat {
   overflow-wrap: break-word;

@@ -340,6 +340,7 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
       } else {
         // real user message
         let text = '';
+        let images: ImageAttachment[] | undefined;
         if (typeof blocks === 'string') {
           text = blocks;
         } else if (Array.isArray(blocks)) {
@@ -347,9 +348,13 @@ function sessionMessagesToChatItems(messages: SessionMessage[]): ChatItem[] {
             .filter((b: any) => b.type === 'text')
             .map((b: any) => b.text)
             .join('\n');
+          const imgBlocks = blocks.filter((b: any) => b.type === 'image' && b.source?.type === 'base64');
+          if (imgBlocks.length) {
+            images = imgBlocks.map((b: any) => ({ data: b.source.data, mediaType: b.source.media_type }));
+          }
         }
-        if (text) {
-          items.push({ type: 'user', content: text, timestamp: ts });
+        if (text || images?.length) {
+          items.push({ type: 'user', content: text, images, timestamp: ts });
         }
       }
       continue;

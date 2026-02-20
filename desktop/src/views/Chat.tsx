@@ -213,22 +213,29 @@ function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGa
 function ThinkingItem({ item }: { item: Extract<ChatItem, { type: 'thinking' }> }) {
   const [open, setOpen] = useState(true);
   const wasStreaming = useRef(true);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (wasStreaming.current && !item.streaming) setOpen(false);
     wasStreaming.current = !!item.streaming;
   }, [item.streaming]);
 
+  useEffect(() => {
+    if (item.streaming && bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    }
+  }, [item.content, item.streaming]);
+
   return (
-    <Collapsible open={open} onOpenChange={setOpen}>
+    <Collapsible open={open} onOpenChange={setOpen} className="thinking-container my-1">
       <CollapsibleTrigger className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors py-0.5 group">
         <Brain className="w-3 h-3" />
         <span>{item.streaming ? 'Thinking...' : 'Thought'}</span>
         <ChevronRight className="w-3 h-3 transition-transform group-data-[state=open]:rotate-90" />
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="text-muted-foreground text-xs pl-[18px] my-0.5 break-words min-w-0">
-          {item.content}
+        <div ref={bodyRef} className="thinking-body thinking-body-faded prose-chat text-muted-foreground text-xs">
+          <Markdown remarkPlugins={[remarkGfm]}>{item.content}</Markdown>
           {item.streaming && <span className="streaming-cursor" />}
         </div>
       </CollapsibleContent>
