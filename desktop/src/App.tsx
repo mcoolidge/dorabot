@@ -35,7 +35,7 @@ type UpdateState = {
 
 const ONBOARDING_COMPLETED_KEY = 'dorabot:onboarding-completed';
 const ONBOARDING_UNAUTH_SNOOZE_UNTIL_KEY = 'dorabot:onboarding-unauth-snooze-until';
-const ONBOARDING_UNAUTH_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
+const ONBOARDING_UNAUTH_SNOOZE_MS = 30 * 24 * 60 * 60 * 1000;
 
 // soft two-tone chime via web audio api
 function playNotifSound() {
@@ -661,7 +661,7 @@ export default function App() {
       {showOnboarding && (
         <OnboardingOverlay
           gateway={gw}
-          onComplete={(launchOnboard) => {
+          onComplete={(launchOnboard, profileData) => {
             setShowOnboarding(false);
             localStorage.setItem(ONBOARDING_COMPLETED_KEY, 'true');
             onboardingCompletedRef.current = true;
@@ -675,9 +675,12 @@ export default function App() {
               );
             }
             if (launchOnboard) {
-              // Launch the onboard skill in a new chat session
               const created = tabState.newChatTab();
-              setTimeout(() => gw.sendMessage('onboard', created.sessionKey, created.chatId), 200);
+              // Pass profile context so the onboard skill doesn't re-ask name/timezone
+              const context = profileData?.name
+                ? `onboard (my name is ${profileData.name}, timezone: ${profileData.timezone || 'auto'})`
+                : 'onboard';
+              setTimeout(() => gw.sendMessage(context, created.sessionKey, created.chatId), 200);
             }
           }}
         />

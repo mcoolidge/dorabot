@@ -169,6 +169,8 @@ export type Config = {
   security?: SecurityConfig;
   mcpServers?: Record<string, McpServerEntry>;
   maxTurns?: number;
+  userName?: string;
+  userTimezone?: string;
   sessionDir: string;
   cwd: string;
 };

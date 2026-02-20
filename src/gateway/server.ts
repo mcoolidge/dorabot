@@ -4572,6 +4572,20 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
             return { id, result: { key, value } };
           }
 
+          if (key === 'userName' && typeof value === 'string') {
+            config.userName = value;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
+          if (key === 'userTimezone' && typeof value === 'string') {
+            config.userTimezone = value;
+            saveConfig(config);
+            broadcast({ event: 'config.update', data: { key, value } });
+            return { id, result: { key, value } };
+          }
+
           return { id, error: `unsupported config key: ${key}` };
         }
 
