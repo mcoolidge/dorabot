@@ -22,7 +22,8 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import {
   MessageSquare, Radio, Zap, Brain, Settings2,
   Sparkles, LayoutGrid, Loader2, Star,
-  Sun, Moon, Clock, FileSearch, Plug, Folder, FolderOpen, X
+  Sun, Moon, Clock, FileSearch, Plug, Folder, FolderOpen, X,
+  ShieldAlert, CalendarCheck, Target, FlaskConical, KeyRound
 } from 'lucide-react';
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
@@ -234,7 +235,11 @@ export default function App() {
           break;
         }
         case 'tool_approval':
-          toast.warning('approval needed', { description: event.toolName, duration: 10000 });
+          toast.warning(`Approve: ${event.toolName}`, {
+            description: 'Agent is waiting for your approval to proceed.',
+            icon: <ShieldAlert className="w-4 h-4 text-amber-400" />,
+            duration: 10000,
+          });
           if (!windowFocused) {
             notify(`approve tool: ${event.toolName}`);
           }
@@ -242,7 +247,10 @@ export default function App() {
           playNotifSound();
           break;
         case 'calendar':
-          toast('calendar event', { description: event.summary, duration: 5000 });
+          toast(event.summary, {
+            icon: <CalendarCheck className="w-4 h-4 text-blue-400" />,
+            duration: 5000,
+          });
           if (!windowFocused) {
             notify(`calendar: ${event.summary}`);
             playNotifSound();
@@ -250,7 +258,14 @@ export default function App() {
           break;
         case 'goals.update':
           if (!allowPing('goals.update')) break;
-          toast('goals updated', { description: 'new goal/task activity', duration: 4000 });
+          toast('Goals updated', {
+            icon: <Target className="w-4 h-4 text-orange-400" />,
+            duration: 4000,
+            action: {
+              label: 'View',
+              onClick: () => tabState.openTab({ id: 'view:goals', type: 'goals', label: 'Goals', closable: true }),
+            },
+          });
           if (!windowFocused) {
             notify('goals updated');
             playNotifSound();
@@ -258,14 +273,29 @@ export default function App() {
           break;
         case 'research.update':
           if (!allowPing('research.update')) break;
-          toast('research updated', { description: 'new research activity', duration: 4000 });
+          toast('Research updated', {
+            icon: <FlaskConical className="w-4 h-4 text-purple-400" />,
+            duration: 4000,
+            action: {
+              label: 'View',
+              onClick: () => tabState.openTab({ id: 'view:research', type: 'research', label: 'Research', closable: true }),
+            },
+          });
           if (!windowFocused) {
             notify('research updated');
             playNotifSound();
           }
           break;
         case 'auth.required':
-          toast.error(`${event.provider} authentication required`, { description: event.reason, duration: 8000 });
+          toast.error(`${event.provider} auth required`, {
+            description: event.reason,
+            icon: <KeyRound className="w-4 h-4 text-red-400" />,
+            duration: 8000,
+            action: {
+              label: 'Settings',
+              onClick: () => tabState.openTab({ id: 'view:settings', type: 'settings', label: 'Settings', closable: true }),
+            },
+          });
           if (!windowFocused) {
             notify(`${event.provider} auth required`);
             playNotifSound();
@@ -275,8 +305,14 @@ export default function App() {
           const preview = event.body.length > 80 ? event.body.slice(0, 80) + '...' : event.body;
           const sender = event.senderName || event.senderId;
           const channelLabel = event.channel.charAt(0).toUpperCase() + event.channel.slice(1);
+          const channelIcon = event.channel === 'telegram'
+            ? <img src={telegramImg} className="w-4 h-4" alt="" />
+            : event.channel === 'whatsapp'
+              ? <img src={whatsappImg} className="w-4 h-4" alt="" />
+              : <MessageSquare className="w-4 h-4 text-muted-foreground" />;
           toast(`${sender}`, {
             description: preview,
+            icon: channelIcon,
             duration: 5000,
             action: {
               label: 'Open',
@@ -675,6 +711,7 @@ export default function App() {
     <TooltipProvider delayDuration={300}>
       <Toaster
         position="top-right"
+        offset={{ top: 48, right: 12 }}
         gap={6}
         toastOptions={{
           className: 'font-mono text-xs !rounded-lg !shadow-lg',

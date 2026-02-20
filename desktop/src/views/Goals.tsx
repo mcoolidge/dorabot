@@ -46,7 +46,7 @@ export function GoalsView({ gateway, onViewSession, onSetupChat }: Props) {
       if (Array.isArray(goalsRes)) setGoals(goalsRes as Goal[]);
       if (Array.isArray(tasksRes)) setTasks(tasksRes as Task[]);
     } catch (err) {
-      toast.error('failed to load', { description: errorText(err) });
+      toast.error('Failed to load goals', { description: errorText(err) });
     } finally {
       setLoading(false);
     }
