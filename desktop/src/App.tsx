@@ -271,10 +271,33 @@ export default function App() {
             playNotifSound();
           }
           break;
+        case 'channel.message': {
+          const preview = event.body.length > 80 ? event.body.slice(0, 80) + '...' : event.body;
+          const sender = event.senderName || event.senderId;
+          const channelLabel = event.channel.charAt(0).toUpperCase() + event.channel.slice(1);
+          toast(`${sender}`, {
+            description: preview,
+            duration: 5000,
+            action: {
+              label: 'Open',
+              onClick: () => {
+                const sessionKey = `${event.channel}:dm:${event.chatId}`;
+                tabState.openChatTab({
+                  sessionKey,
+                  chatId: event.chatId,
+                  channel: event.channel,
+                  label: `${channelLabel} - ${sender}`,
+                });
+              },
+            },
+          });
+          playNotifSound();
+          break;
+        }
       }
     };
     return () => { gw.onNotifiableEventRef.current = null; };
-  }, [gw.onNotifiableEventRef, notify]);
+  }, [gw.onNotifiableEventRef, notify, tabState]);
 
   const filteredSessions = useMemo(() => {
     if (sessionFilter === 'all') return gw.sessions;
@@ -651,7 +674,7 @@ export default function App() {
   return (
     <TooltipProvider delayDuration={300}>
       <Toaster
-        position="bottom-right"
+        position="top-right"
         gap={6}
         toastOptions={{
           className: 'font-mono text-xs !rounded-lg !shadow-lg',

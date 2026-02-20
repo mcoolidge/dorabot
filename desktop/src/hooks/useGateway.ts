@@ -166,7 +166,8 @@ export type NotifiableEvent =
   | { type: 'auth.required'; provider: string; reason: string }
   | { type: 'whatsapp.status'; status: string }
   | { type: 'telegram.status'; status: string }
-  | { type: 'calendar'; summary: string };
+  | { type: 'calendar'; summary: string }
+  | { type: 'channel.message'; channel: string; chatId: string; senderId: string; senderName?: string; body: string };
 
 export type BackgroundRun = {
   id: string;
@@ -1103,6 +1104,7 @@ export function useGateway(url = 'wss://localhost:18789') {
       case 'channel.message': {
         const d = data as ChannelMessage;
         setChannelMessages(prev => [...prev.slice(-500), d]);
+        onNotifiableEventRef.current?.({ type: 'channel.message', channel: d.channel, chatId: d.chatId, senderId: d.senderId, senderName: d.senderName, body: d.body });
         break;
       }
 
