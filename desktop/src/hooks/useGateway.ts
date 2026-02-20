@@ -89,8 +89,10 @@ function applyStreamEvent(items: ChatItem[], evt: Record<string, unknown>): Chat
   return items;
 }
 
+export type ImageAttachment = { data: string; mediaType: string };
+
 export type ChatItem =
-  | { type: 'user'; content: string; timestamp: number }
+  | { type: 'user'; content: string; images?: ImageAttachment[]; timestamp: number }
   | { type: 'text'; content: string; streaming?: boolean; timestamp: number }
   | { type: 'tool_use'; id: string; name: string; input: string; output?: string; imageData?: string; is_error?: boolean; streaming?: boolean; subItems?: ChatItem[]; timestamp: number }
   | { type: 'thinking'; content: string; streaming?: boolean; timestamp: number }
@@ -1382,7 +1384,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     };
   }, []);
 
-  const sendMessage = useCallback(async (prompt: string, sessionKey?: string, chatId?: string) => {
+  const sendMessage = useCallback(async (prompt: string, sessionKey?: string, chatId?: string, images?: ImageAttachment[]) => {
     const sk = sessionKey || activeSessionKeyRef.current;
     const cid = chatId || sk.split(':').slice(2).join(':') || currentChatIdRef.current;
     activeSessionKeyRef.current = sk;
@@ -1399,13 +1401,13 @@ export function useGateway(url = 'wss://localhost:18789') {
         ...prev,
         [sk]: {
           ...state,
-          chatItems: [...state.chatItems, { type: 'user', content: prompt, timestamp: Date.now() }],
+          chatItems: [...state.chatItems, { type: 'user', content: prompt, images: images?.length ? images : undefined, timestamp: Date.now() }],
           agentStatus: state.agentStatus === 'idle' ? 'thinking...' : state.agentStatus,
         },
       };
     });
     try {
-      const res = await rpc('chat.send', { prompt, chatId: cid, sessionKey: sk }) as { sessionKey?: string } | undefined;
+      const res = await rpc('chat.send', { prompt, images: images?.length ? images : undefined, chatId: cid, sessionKey: sk }) as { sessionKey?: string } | undefined;
       if (res?.sessionKey && res.sessionKey !== sk) {
         // sessionKey changed (e.g. server normalized it) — migrate state
         activeSessionKeyRef.current = res.sessionKey;
@@ -1443,24 +1445,24 @@ export function useGateway(url = 'wss://localhost:18789') {
   }, [loadSessionIntoMap]);
 
   const answerQuestion = useCallback(async (requestId: string, answers: Record<string, string>, sessionKey?: string) => {
+    let success = false;
     try {
       await rpc('chat.answerQuestion', { requestId, answers });
-      const sk = sessionKey || activeSessionKeyRef.current;
-      setSessionStates(prev => {
-        const state = prev[sk];
-        if (!state) return prev;
-        return { ...prev, [sk]: { ...state, pendingQuestion: null, agentStatus: 'thinking...' } };
-      });
+      success = true;
     } catch (err) {
       console.error('failed to answer question:', err);
-      // question already timed out or gone server-side — clear UI anyway
-      const sk = sessionKey || activeSessionKeyRef.current;
-      setSessionStates(prev => {
-        const state = prev[sk];
-        if (!state) return prev;
-        return { ...prev, [sk]: { ...state, pendingQuestion: null } };
-      });
     }
+    const sk = sessionKey || activeSessionKeyRef.current;
+    setSessionStates(prev => {
+      const state = prev[sk];
+      if (!state) return prev;
+      const chatItems = state.chatItems.map(it =>
+        it.type === 'tool_use' && it.name === 'AskUserQuestion' && it.streaming
+          ? { ...it, streaming: false }
+          : it
+      );
+      return { ...prev, [sk]: { ...state, chatItems, pendingQuestion: null, ...(success ? { agentStatus: 'thinking...' } : {}) } };
+    });
   }, [rpc]);
 
   const dismissQuestion = useCallback((sessionKey?: string) => {

@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect, useMemo, type KeyboardEvent } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback, type KeyboardEvent, type ClipboardEvent, type DragEvent } from 'react';
 import { DorabotSprite } from '../components/DorabotSprite';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { useGateway, ChatItem, AskUserQuestion } from '../hooks/useGateway';
+import type { useGateway, ChatItem, AskUserQuestion, ImageAttachment } from '../hooks/useGateway';
 import { ApprovalList } from '@/components/approval-ui';
 import { ToolUI } from '@/components/tool-ui';
 import { ToolStreamCard, hasStreamCard } from '@/components/tool-stream';
@@ -23,6 +23,7 @@ import {
   Globe, Search, Bot, MessageCircle, ListChecks, FileCode,
   MessageSquare, Camera, Monitor, Clock, Wrench, ArrowUp, LayoutGrid,
   Smile, Image, Brain, MapPin, PenLine, GitPullRequest, Radio,
+  Paperclip, X,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -510,6 +511,29 @@ const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: 'Esc', label: 'stop' },
 ];
 
+function ImagePreviewStrip({ images, onRemove }: { images: ImageAttachment[]; onRemove: (index: number) => void }) {
+  if (images.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+      {images.map((img, j) => (
+        <div key={j} className="relative group">
+          <img
+            src={`data:${img.mediaType};base64,${img.data}`}
+            alt="attachment"
+            className="h-16 rounded border border-border/40 object-cover"
+          />
+          <button
+            className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+            onClick={() => onRemove(j)}
+          >
+            <X className="w-2.5 h-2.5" />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function getGreeting(): string {
   const h = new Date().getHours();
   if (h < 12) return 'good morning';
@@ -520,11 +544,59 @@ function getGreeting(): string {
 export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, sessionKey, onNavigateSettings }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [attachedImages, setAttachedImages] = useState<ImageAttachment[]>([]);
+  const [compact, setCompact] = useState(false);
   const nextAutoScrollBehaviorRef = useRef<ScrollBehavior>('auto');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const landingInputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const landingRef = useRef<HTMLDivElement>(null);
   const isRunning = agentStatus !== 'idle';
   const isEmpty = chatItems.length === 0;
+
+  useEffect(() => {
+    const el = landingRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setCompact(e.contentRect.height < 480));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const addImagesFromFiles = useCallback((files: FileList | File[]) => {
+    const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
+    for (const file of imageFiles) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const base64 = result.split(',')[1];
+        if (base64) {
+          setAttachedImages(prev => [...prev, { data: base64, mediaType: file.type }]);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  }, []);
+
+  const handlePaste = useCallback((e: ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const imageItems = Array.from(items).filter(i => i.type.startsWith('image/'));
+    if (imageItems.length === 0) return;
+    e.preventDefault();
+    for (const item of imageItems) {
+      const file = item.getAsFile();
+      if (file) addImagesFromFiles([file]);
+    }
+  }, [addImagesFromFiles]);
+
+  const handleDrop = useCallback((e: DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer?.files) addImagesFromFiles(e.dataTransfer.files);
+  }, [addImagesFromFiles]);
+
+  const handleDragOver = useCallback((e: DragEvent) => {
+    e.preventDefault();
+  }, []);
 
   // Derive streamingQuestion from this session's chatItems (not the global active session)
   const streamingQuestion = useMemo<AskUserQuestion['questions'] | null>(() => {
@@ -557,14 +629,16 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
 
   const handleSend = async (overridePrompt?: string) => {
     const prompt = overridePrompt || input.trim();
-    if (!prompt || sending || pendingQuestion) return;
+    if ((!prompt && attachedImages.length === 0) || sending || pendingQuestion) return;
 
+    const images = attachedImages.length > 0 ? [...attachedImages] : undefined;
     nextAutoScrollBehaviorRef.current = 'smooth';
     if (!overridePrompt) setInput('');
+    setAttachedImages([]);
     setSending(true);
     try {
       const chatId = sessionKey ? sessionKey.split(':').slice(2).join(':') : undefined;
-      await gateway.sendMessage(prompt, sessionKey, chatId);
+      await gateway.sendMessage(prompt || 'What do you see in this image?', sessionKey, chatId, images);
     } finally {
       setSending(false);
     }
@@ -587,7 +661,21 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         return (
           <div key={i} className="flex gap-2 px-2 py-1.5 my-1 bg-secondary rounded-md min-w-0">
             <span className="text-primary font-semibold shrink-0">{'>'}</span>
-            <span className="text-foreground break-words min-w-0">{item.content}</span>
+            <div className="min-w-0">
+              {item.images?.length ? (
+                <div className="flex flex-wrap gap-1.5 mb-1.5">
+                  {item.images.map((img, j) => (
+                    <img
+                      key={j}
+                      src={`data:${img.mediaType};base64,${img.data}`}
+                      alt="attached"
+                      className="max-h-32 rounded border border-border/40 object-cover"
+                    />
+                  ))}
+                </div>
+              ) : null}
+              {item.content && <span className="text-foreground break-words">{item.content}</span>}
+            </div>
           </div>
         );
       case 'text':
@@ -644,17 +732,17 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   // landing page — centered input with suggestions
   if (isEmpty) {
     return (
-      <div className="flex flex-col h-full min-h-0 min-w-0">
+      <div ref={landingRef} className="flex flex-col h-full min-h-0 min-w-0">
         <div className="flex-1 flex items-center justify-center min-h-0 min-w-0">
           <AuroraBackground className="w-full h-full">
-            <div className="w-full max-w-2xl px-6 space-y-6">
+            <div className={cn('w-full mx-auto', compact ? 'space-y-3 px-4' : 'space-y-6 max-w-2xl px-6')}>
               {/* greeting */}
               <div className="text-center space-y-2">
-                <div className="relative mx-auto" style={{ width: 96, height: 131 }}>
+                <div className="relative mx-auto" style={{ width: compact ? 56 : 96, height: compact ? 77 : 131 }}>
                   <div className="absolute inset-0 rounded-full bg-success/30 blur-xl animate-pulse" />
-                  <DorabotSprite size={96} className="relative" />
+                  <DorabotSprite size={compact ? 56 : 96} className="relative dorabot-alive" />
                 </div>
-                <h1 className="text-lg font-semibold text-foreground">{getGreeting()}</h1>
+                <h1 className={cn('font-semibold text-foreground', compact ? 'text-sm' : 'text-lg')}>{getGreeting()}</h1>
                 <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
                   <div className={cn('w-1.5 h-1.5 rounded-full', isReady ? 'bg-success' : connected && !authenticated ? 'bg-warning' : connected ? 'bg-success' : 'bg-destructive')} />
                   {!connected ? 'connecting...' : !authenticated ? <>set up provider in <button type="button" className="underline hover:text-foreground transition-colors" onClick={onNavigateSettings}>Settings</button></> : 'ready'}
@@ -662,25 +750,45 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
               </div>
 
               {/* centered input */}
-              <Card className="rounded-2xl chat-input-area">
+              <Card className="rounded-2xl chat-input-area" onDrop={handleDrop} onDragOver={handleDragOver}>
+                <ImagePreviewStrip images={attachedImages} onRemove={j => setAttachedImages(prev => prev.filter((_, k) => k !== j))} />
                 <Textarea
                   ref={landingInputRef}
                   value={input}
                   onChange={e => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
+                  onPaste={handlePaste}
                   placeholder={!connected ? 'waiting for gateway...' : !authenticated ? 'set up your AI provider to get started' : 'what are we building?'}
                   disabled={!isReady}
                   className="w-full min-h-[80px] max-h-[200px] resize-none text-sm border-0 rounded-2xl bg-transparent shadow-none focus-visible:ring-0"
                   rows={2}
                 />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={e => { if (e.target.files) addImagesFromFiles(e.target.files); e.target.value = ''; }}
+                />
                 <div className="flex items-center px-3 pb-3">
                   <ModelSelector gateway={gateway} disabled={!connected} />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 rounded-lg ml-1"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={!isReady}
+                    title="Attach image"
+                  >
+                    <Paperclip className="w-4 h-4 text-muted-foreground" />
+                  </Button>
                   <span className="flex-1" />
                   <Button
                     size="sm"
                     className="h-8 w-8 p-0 rounded-lg"
                     onClick={() => { handleSend(); }}
-                    disabled={!input.trim() || sending || !isReady}
+                    disabled={(!input.trim() && attachedImages.length === 0) || sending || !isReady}
                   >
                     <ArrowUp className="w-4 h-4" />
                   </Button>
@@ -688,7 +796,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
               </Card>
 
               {/* suggestions */}
-              {isReady && (
+              {isReady && !compact && (
                 <div className="grid grid-cols-1 @sm:grid-cols-2 @lg:grid-cols-3 gap-2">
                   {SUGGESTIONS.map(s => (
                     <button
@@ -704,14 +812,16 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
               )}
 
               {/* keyboard shortcuts */}
-              <div className="flex flex-wrap justify-center gap-x-4 gap-y-1.5 text-[10px] text-muted-foreground/80 pt-2">
-                {SHORTCUTS.map(s => (
-                  <span key={s.keys} className="flex items-center gap-1">
-                    <kbd className="px-1.5 py-0.5 rounded border border-border/50 bg-muted/60 text-[10px] font-mono">{s.keys}</kbd>
-                    <span>{s.label}</span>
-                  </span>
-                ))}
-              </div>
+              {!compact && (
+                <div className="flex flex-wrap justify-center gap-x-4 gap-y-1.5 text-[10px] text-muted-foreground/80 pt-2">
+                  {SHORTCUTS.map(s => (
+                    <span key={s.keys} className="flex items-center gap-1">
+                      <kbd className="px-1.5 py-0.5 rounded border border-border/50 bg-muted/60 text-[10px] font-mono">{s.keys}</kbd>
+                      <span>{s.label}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </AuroraBackground>
         </div>
@@ -763,19 +873,39 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
 
       {/* input area */}
       <div className="px-4 py-3 shrink-0 min-w-0">
-        <Card className="rounded-2xl chat-input-area">
+        <Card className="rounded-2xl chat-input-area" onDrop={handleDrop} onDragOver={handleDragOver}>
+          <ImagePreviewStrip images={attachedImages} onRemove={j => setAttachedImages(prev => prev.filter((_, k) => k !== j))} />
           <Textarea
             ref={inputRef}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder={connected ? 'type a message...' : 'waiting for gateway...'}
             disabled={!connected || !!pendingQuestion}
             className="w-full min-h-[64px] max-h-[200px] resize-none text-[13px] border-0 rounded-2xl bg-transparent shadow-none focus-visible:ring-0"
             rows={2}
           />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={e => { if (e.target.files) addImagesFromFiles(e.target.files); e.target.value = ''; }}
+          />
           <div className="flex items-center px-3 pb-3">
             <ModelSelector gateway={gateway} disabled={!connected} />
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 rounded-lg ml-1"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={!connected}
+              title="Attach image"
+            >
+              <Paperclip className="w-4 h-4 text-muted-foreground" />
+            </Button>
             <span className="flex-1" />
             {isRunning ? (
               <Button
@@ -791,7 +921,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                 size="sm"
                 className="h-8 w-8 p-0 rounded-lg"
                 onClick={() => { handleSend(); }}
-                disabled={!input.trim() || sending || !connected}
+                disabled={(!input.trim() && attachedImages.length === 0) || sending || !connected}
               >
                 <ArrowUp className="w-4 h-4" />
               </Button>
