@@ -771,7 +771,10 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                     : 'ready'}
                 </div>
                 {gatewayFailed && gateway.gatewayError?.logs && (
-                  <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-muted/50 p-3 text-[10px] font-mono text-muted-foreground text-left whitespace-pre-wrap break-all max-w-md mx-auto">{gateway.gatewayError.logs}</pre>
+                  <details className="mt-2 max-w-md mx-auto text-left">
+                    <summary className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground transition-colors select-none">view logs</summary>
+                    <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted/50 p-3 text-[10px] font-mono text-muted-foreground whitespace-pre-wrap break-all">{gateway.gatewayError.logs}</pre>
+                  </details>
                 )}
               </div>
 
