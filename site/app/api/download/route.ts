@@ -7,7 +7,7 @@ export async function GET() {
   try {
     const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
       headers: { Accept: "application/vnd.github+json" },
-      next: { revalidate: 300 },
+      next: { revalidate: 0 },
     })
 
     if (!res.ok) return NextResponse.redirect(FALLBACK)
