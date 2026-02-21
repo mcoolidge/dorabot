@@ -73,7 +73,7 @@ export function Hero() {
       </div>
 
       <div className="relative z-10 mx-auto w-full max-w-7xl">
-        <div className="mb-4 flex justify-center hero-stagger hero-stagger-1">
+        <div className="mb-4 flex justify-center">
           <div className="inline-flex items-center gap-2 rounded-full border border-border bg-bg-card/40 px-3.5 py-2 text-xs text-text-secondary sm:px-5 sm:py-2.5 sm:text-sm">
             <span className="inline-block h-2.5 w-2.5 rounded-full bg-green animate-pulse" />
             Open-Source · 100% private · 100% local
@@ -81,7 +81,7 @@ export function Hero() {
         </div>
 
         <div className="text-center">
-          <div className="mb-6 flex justify-center hero-stagger hero-stagger-2">
+          <div className="mb-6 flex justify-center">
             <img
               src="/dorabot.png"
               alt="dorabot"
@@ -93,7 +93,7 @@ export function Hero() {
             />
           </div>
 
-          <h1 className="mx-auto max-w-4xl text-center tracking-tight hero-stagger hero-stagger-3">
+          <h1 className="mx-auto max-w-4xl text-center tracking-tight">
             <span className="block bg-gradient-to-r from-accent via-purple to-accent bg-clip-text text-2xl font-bold leading-[1.08] text-transparent sm:text-4xl md:text-5xl">
               Your 24x7 self-learning AI agent
             </span>
