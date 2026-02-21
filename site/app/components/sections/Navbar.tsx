@@ -73,10 +73,11 @@ export function Navbar() {
           </button>
           <a
             href="https://github.com/suitedaces/dorabot"
-            className="hidden sm:inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm text-text-secondary hover:text-text hover:bg-surface-mid transition-colors"
+            className="star-glow hidden sm:inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-bg-card px-4 py-2 text-sm font-medium text-text"
           >
             <GithubIcon />
-            Star
+            <span>Star on GitHub</span>
+            <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4 text-yellow-400"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" /></svg>
           </a>
           <button
             onClick={() => setMobileOpen(v => !v)}
