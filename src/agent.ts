@@ -1,4 +1,5 @@
 import { mkdirSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import type { Config, SandboxSettings } from './config.js';
 import type { RunHandle } from './providers/types.js';
 import { getProvider } from './providers/index.js';
@@ -25,6 +26,47 @@ import { getAllAgents } from './agents/definitions.js';
 import { SessionManager, sdkMessageToSession, type SessionMessage, type MessageMetadata } from './session/manager.js';
 import { loadWorkspaceFiles, ensureWorkspace, TMP_DIR } from './workspace.js';
 
+// Resolve shell PATH once at startup (Electron apps get minimal /usr/bin:/bin:/usr/sbin:/sbin)
+let _resolvedShellPath: string | null = null;
+function getShellPath(): string {
+  if (_resolvedShellPath !== null) return _resolvedShellPath;
+  const currentPath = process.env.PATH || '';
+
+  // If PATH already has common node locations, skip shell resolution
+  if (currentPath.includes('nvm') || currentPath.includes('homebrew') || currentPath.includes('fnm') || currentPath.includes('/usr/local/bin')) {
+    _resolvedShellPath = currentPath;
+    return _resolvedShellPath;
+  }
+
+  // Resolve from login shell
+  try {
+    const shell = process.env.SHELL || '/bin/zsh';
+    _resolvedShellPath = execSync(`${shell} -lc 'echo -n $PATH'`, {
+      timeout: 5000,
+      encoding: 'utf-8',
+    }).trim();
+  } catch {
+    _resolvedShellPath = currentPath;
+  }
+
+  // Append common node binary locations as fallback
+  const fallbackPaths = [
+    '/usr/local/bin',
+    '/opt/homebrew/bin',
+    `${process.env.HOME}/.nvm/current/bin`,
+    `${process.env.HOME}/.fnm/current/bin`,
+    `${process.env.HOME}/.volta/bin`,
+    `${process.env.HOME}/.local/bin`,
+  ];
+  for (const p of fallbackPaths) {
+    if (!_resolvedShellPath.includes(p)) {
+      _resolvedShellPath += `:${p}`;
+    }
+  }
+
+  return _resolvedShellPath;
+}
+
 // clean env for SDK subprocess - strip vscode vars that cause file watcher crashes
 function cleanEnvForSdk(): Record<string, string> {
   const env: Record<string, string> = {};
@@ -36,6 +78,8 @@ function cleanEnvForSdk(): Record<string, string> {
     if (key === 'CLAUDECODE') continue;
     env[key] = val;
   }
+  // Ensure PATH includes node binary locations (critical for Electron)
+  env.PATH = getShellPath();
   // use a clean tmpdir so SDK file watcher doesn't hit socket files
   const sdkTmp = TMP_DIR;
   mkdirSync(sdkTmp, { recursive: true });

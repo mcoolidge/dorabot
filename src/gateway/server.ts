@@ -2699,7 +2699,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         console.log(`[gateway] agent run ended: source=${source} result="${result.result.slice(0, 100)}..." cost=$${result.usage.totalCostUsd?.toFixed(4) || '?'}`);
       } catch (err) {
         console.error(`[gateway] agent error: source=${source}`, err);
-        const errMsg = err instanceof Error ? err.message : String(err);
+        let errMsg = err instanceof Error ? err.message : String(err);
+        // Improve error message for common issues
+        if (errMsg.includes('spawn node ENOENT') || errMsg.includes('spawn node')) {
+          errMsg = 'Node.js not found. Install Node.js (https://nodejs.org) or Claude Code CLI (`npm install -g @anthropic-ai/claude-code`), then restart dorabot.';
+        }
         finishPlanRun(sessionKey, 'error', errMsg);
         finishTaskRun(sessionKey, 'error', errMsg);
         if (isAuthError(err)) {
