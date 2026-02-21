@@ -20,6 +20,11 @@ ipcRenderer.on('gateway-token', (_event, token: string) => {
   }
 });
 
+// Listen for gateway errors from main process
+ipcRenderer.on('gateway-error', (_event, payload: { error: string; logs: string }) => {
+  window.dispatchEvent(new CustomEvent('dorabot:gateway-error', { detail: payload }));
+});
+
 const electronAPI = {
   platform: process.platform,
   appVersion: (() => { try { return require('electron').app?.getVersion?.() || process.env.npm_package_version || '0.0.0'; } catch { return '0.0.0'; } })(),

@@ -746,6 +746,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   const connected = gateway.connectionState === 'connected';
   const authenticated = gateway.providerInfo?.auth?.authenticated ?? true; // assume true until loaded
   const isReady = connected && authenticated;
+  const gatewayFailed = !connected && !!gateway.gatewayError;
 
   // landing page — centered input with suggestions
   if (isEmpty) {
@@ -761,10 +762,17 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   <DorabotSprite size={compact ? 56 : 96} className="relative dorabot-alive" />
                 </div>
                 <h1 className={cn('font-semibold text-foreground', compact ? 'text-sm' : 'text-lg')}>{getGreeting()}</h1>
-                <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
-                  <div className={cn('w-1.5 h-1.5 rounded-full', isReady ? 'bg-success' : connected && !authenticated ? 'bg-warning' : connected ? 'bg-success' : 'bg-destructive')} />
-                  {!connected ? 'connecting...' : !authenticated ? <>set up provider in <button type="button" className="underline hover:text-foreground transition-colors" onClick={onNavigateSettings}>Settings</button></> : 'ready'}
+                <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground max-w-sm">
+                  <div className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', isReady ? 'bg-success' : connected && !authenticated ? 'bg-warning' : connected ? 'bg-success' : 'bg-destructive')} />
+                  {gatewayFailed
+                    ? <span className="text-destructive">{gateway.gatewayError?.error || 'gateway failed to start'}</span>
+                    : !connected ? 'connecting...'
+                    : !authenticated ? <>set up provider in <button type="button" className="underline hover:text-foreground transition-colors" onClick={onNavigateSettings}>Settings</button></>
+                    : 'ready'}
                 </div>
+                {gatewayFailed && gateway.gatewayError?.logs && (
+                  <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-muted/50 p-3 text-[10px] font-mono text-muted-foreground text-left whitespace-pre-wrap break-all max-w-md mx-auto">{gateway.gatewayError.logs}</pre>
+                )}
               </div>
 
               {/* centered input */}

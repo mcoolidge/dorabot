@@ -4,7 +4,18 @@ import { is } from '@electron-toolkit/utils';
 import * as path from 'path';
 import { readFileSync, existsSync } from 'fs';
 import { GatewayManager } from './gateway-manager';
-import { GATEWAY_TOKEN_PATH } from './dorabot-paths';
+import { GATEWAY_TOKEN_PATH, GATEWAY_LOG_PATH } from './dorabot-paths';
+
+function readGatewayLogs(): string {
+  try {
+    if (!existsSync(GATEWAY_LOG_PATH)) return '';
+    const content = readFileSync(GATEWAY_LOG_PATH, 'utf-8');
+    const lines = content.split('\n');
+    return lines.slice(-30).join('\n').trim();
+  } catch {
+    return '';
+  }
+}
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -255,14 +266,14 @@ app.on('ready', async () => {
     },
     onError: (error) => {
       console.error('[main] Gateway error:', error);
-      // Keep tray status actionable without getting stuck in a hard "error" state
-      // for transient startup issues. onReady/onExit will update it again.
       updateTrayTitle('offline');
+      mainWindow?.webContents.send('gateway-error', { error, logs: readGatewayLogs() });
     },
     onExit: (code) => {
       console.log('[main] Gateway exited:', code);
       if (!isQuitting) {
         updateTrayTitle('offline');
+        mainWindow?.webContents.send('gateway-error', { error: `Gateway exited with code ${code}`, logs: readGatewayLogs() });
       }
     },
   });

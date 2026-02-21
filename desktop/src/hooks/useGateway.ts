@@ -469,6 +469,7 @@ export function useGateway(url = 'wss://localhost:18789') {
   const [researchVersion, setResearchVersion] = useState(0);
   const [backgroundRuns, setBackgroundRuns] = useState<BackgroundRun[]>([]);
   const [calendarRuns, setCalendarRuns] = useState<CalendarRun[]>([]);
+  const [gatewayError, setGatewayError] = useState<{ error: string; logs: string } | null>(null);
   const [gatewayTelemetry, setGatewayTelemetry] = useState<GatewayTelemetry>({
     reconnectCount: 0,
     replayCount: 0,
@@ -1315,6 +1316,7 @@ export function useGateway(url = 'wss://localhost:18789') {
     const unsubscribe = client.subscribe((notification) => {
       if (notification.type === 'connection') {
         setConnectionState(notification.state);
+        if (notification.state === 'connected') setGatewayError(null);
         setGatewayTelemetry(prev => ({
           ...prev,
           reconnectCount: notification.reconnectCount,
@@ -1345,9 +1347,19 @@ export function useGateway(url = 'wss://localhost:18789') {
       handleEvent(msg as GatewayEvent);
     });
 
+    // Listen for gateway errors from main process (via preload custom event)
+    const onGatewayError = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail && typeof detail === 'object' && 'error' in detail) {
+        setGatewayError(detail as { error: string; logs: string });
+      }
+    };
+    window.addEventListener('dorabot:gateway-error', onGatewayError);
+
     client.connect(url);
     return () => {
       unsubscribe();
+      window.removeEventListener('dorabot:gateway-error', onGatewayError);
     };
   }, [url, handleEvent, markSeqIfNew]);
 
@@ -1775,6 +1787,7 @@ export function useGateway(url = 'wss://localhost:18789') {
 
   return {
     connectionState,
+    gatewayError,
     // Active session derived values (backward compat)
     chatItems,
     progress,
