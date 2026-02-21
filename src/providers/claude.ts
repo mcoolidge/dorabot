@@ -586,10 +586,10 @@ export class ClaudeProvider implements Provider {
     let waitingForMessage: ((msg: UserMsg) => void) | null = null;
     let closed = false;
 
-    const makeUserMsg = (text: string, images?: import('./types.js').ImageAttachment[]): UserMsg => {
+    const makeUserMsg = async (text: string, images?: import('./types.js').ImageAttachment[]): Promise<UserMsg> => {
       const content: ContentBlock[] = [];
       if (images?.length) {
-        const { valid, warnings } = guardImages(images);
+        const { valid, warnings } = await guardImages(images);
         for (const img of valid) {
           content.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
         }
@@ -606,10 +606,11 @@ export class ClaudeProvider implements Provider {
       };
     };
 
-    // Seed the queue with the initial prompt
-    messageQueue.push(makeUserMsg(opts.prompt, opts.images));
+    // Seed the queue with the initial prompt (async for image processing)
+    const seedReady = makeUserMsg(opts.prompt, opts.images).then(msg => messageQueue.push(msg));
 
     async function* messageGenerator(): AsyncGenerator<UserMsg, void, unknown> {
+      await seedReady;
       while (!closed && !opts.abortController?.signal.aborted) {
         if (messageQueue.length > 0) {
           yield messageQueue.shift()!;
@@ -632,18 +633,25 @@ export class ClaudeProvider implements Provider {
       get active() { return !closed; },
       inject(text: string, images?: import('./types.js').ImageAttachment[]): boolean {
         if (closed) return false;
-        const msg = makeUserMsg(text, images);
-        if (waitingForMessage) {
-          waitingForMessage(msg);
-        } else {
-          messageQueue.push(msg);
-        }
+        makeUserMsg(text, images).then(msg => {
+          if (closed) return;
+          if (waitingForMessage) {
+            waitingForMessage(msg);
+          } else {
+            messageQueue.push(msg);
+          }
+        });
         return true;
       },
       close() {
         closed = true;
         if (waitingForMessage) {
-          waitingForMessage(makeUserMsg(''));
+          waitingForMessage({
+            type: 'user',
+            session_id: '',
+            message: { role: 'user', content: [{ type: 'text', text: '' }] },
+            parent_tool_use_id: null,
+          });
         }
       },
       async interrupt() { await queryRef?.interrupt(); },
