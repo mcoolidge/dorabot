@@ -206,10 +206,11 @@ export function Hero() {
                 muted
                 controls
                 playsInline
+                preload="none"
                 className="w-full"
                 poster="/gifs/memory.gif"
               >
-                <source src="https://github.com/suitedaces/dorabot/releases/download/v0.2.3/dorabot-demo-annotated.mp4#t=4" type="video/mp4" />
+                <source src="https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/dorabot-demo-annotated.mp4#t=4" type="video/mp4" />
               </video>
             </div>
           </motion.div>
