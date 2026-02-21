@@ -74,7 +74,7 @@ if [ -d "$SHARP_DIR" ]; then
   for dir in "$SHARP_DIR"/*/; do
     dirname=$(basename "$dir")
     case "$dirname" in
-      *darwin*) ;; # keep all macOS sharp packages
+      *darwin*|colour) ;; # keep macOS sharp packages + pure JS deps
       *) echo "    Removing @img/$dirname"; rm -rf "$dir" ;;
     esac
   done
