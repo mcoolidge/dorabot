@@ -766,7 +766,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                   <div className={cn('w-1.5 h-1.5 rounded-full', isReady ? 'bg-success' : connected && !authenticated ? 'bg-warning' : connected ? 'bg-success' : 'bg-destructive')} />
                   {gatewayFailed
                     ? <span className="text-destructive">{gateway.gatewayError?.error || 'gateway failed to start'}</span>
-                    : !connected ? 'connecting...'
+                    : !connected ? <>connecting...{gateway.gatewayTelemetry.reconnectCount > 2 && <span className="ml-1 opacity-60">({gateway.gatewayTelemetry.disconnectReason || 'retrying'})</span>}</>
                     : !authenticated ? <>set up provider in <button type="button" className="underline hover:text-foreground transition-colors" onClick={onNavigateSettings}>Settings</button></>
                     : 'ready'}
                 </div>

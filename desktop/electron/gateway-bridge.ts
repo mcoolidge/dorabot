@@ -4,9 +4,9 @@
  * (no Chromium TLS restrictions). Relays messages to/from renderer via IPC.
  */
 import WebSocket from 'ws';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, appendFileSync } from 'fs';
 import { BrowserWindow } from 'electron';
-import { GATEWAY_TOKEN_PATH } from './dorabot-paths';
+import { GATEWAY_TOKEN_PATH, GATEWAY_LOG_PATH } from './dorabot-paths';
 
 const HEARTBEAT_INTERVAL_MS = 10_000;
 const HEARTBEAT_TIMEOUT_MS = 5_000;
@@ -27,9 +27,16 @@ export class GatewayBridge {
   private window: BrowserWindow | null = null;
   private url: string;
   private connectId: string | undefined;
+  private lastReason: string | undefined;
 
   constructor(url = 'wss://127.0.0.1:18789') {
     this.url = url;
+  }
+
+  private log(msg: string): void {
+    const line = `[bridge] ${new Date().toISOString()} ${msg}\n`;
+    console.log(line.trim());
+    try { appendFileSync(GATEWAY_LOG_PATH, line); } catch {}
   }
 
   setWindow(win: BrowserWindow | null): void {
@@ -68,18 +75,20 @@ export class GatewayBridge {
     }
   }
 
-  getState(): { state: BridgeState; reconnectCount: number; connectId?: string } {
-    return { state: this.state, reconnectCount: this.reconnectCount, connectId: this.connectId };
+  getState(): { state: BridgeState; reconnectCount: number; connectId?: string; lastReason?: string } {
+    return { state: this.state, reconnectCount: this.reconnectCount, connectId: this.connectId, lastReason: this.lastReason };
   }
 
   private openSocket(): void {
     this.setState('connecting');
+    this.log(`opening WebSocket to ${this.url} (attempt ${this.reconnectAttempt})`);
 
     const ws = new WebSocket(this.url, { rejectUnauthorized: false });
     this.ws = ws;
 
     ws.on('open', () => {
       if (this.ws !== ws) return;
+      this.log('WebSocket open, authenticating...');
       this.setState('connected');
       this.authenticate(ws);
     });
@@ -95,8 +104,12 @@ export class GatewayBridge {
           const pending = this.pendingRpc.get(msg.id)!;
           this.pendingRpc.delete(msg.id);
           clearTimeout(pending.timer);
-          if (msg.error) pending.reject(new Error(String(msg.error)));
-          else pending.resolve(msg.result);
+          if (msg.error) {
+            this.log(`RPC ${msg.id} error: ${msg.error}`);
+            pending.reject(new Error(String(msg.error)));
+          } else {
+            pending.resolve(msg.result);
+          }
           return;
         }
       } catch {}
@@ -110,11 +123,13 @@ export class GatewayBridge {
       this.ws = null;
       this.stopHeartbeat();
       const reasonStr = reason.toString().trim() || `ws_close_${code}`;
+      this.log(`WebSocket closed: code=${code} reason=${reasonStr}`);
       this.setState('disconnected', reasonStr);
       if (!this.manuallyClosed) this.scheduleReconnect(reasonStr);
     });
 
-    ws.on('error', () => {
+    ws.on('error', (err) => {
+      this.log(`WebSocket error: ${err.message}`);
       try { ws.close(); } catch {}
     });
   }
@@ -122,11 +137,13 @@ export class GatewayBridge {
   private authenticate(ws: WebSocket): void {
     const token = this.readToken();
     if (!token) {
+      this.log(`auth failed: no token at ${GATEWAY_TOKEN_PATH}`);
       this.setState('disconnected', 'missing_token');
       this.scheduleReconnect('missing_token');
       try { ws.close(); } catch {}
       return;
     }
+    this.log(`sending auth (token length=${token.length})`);
 
     const id = ++this.rpcId;
     const timer = setTimeout(() => {
@@ -141,6 +158,7 @@ export class GatewayBridge {
         const auth = (res || {}) as { authenticated?: boolean; connectId?: string };
         this.connectId = auth.connectId;
         this.reconnectAttempt = 0;
+        this.log(`authenticated, connectId=${auth.connectId}`);
         this.setState('authenticated');
         this.startHeartbeat();
       },
@@ -214,6 +232,7 @@ export class GatewayBridge {
 
   private setState(state: BridgeState, reason?: string, reconnectInMs?: number): void {
     this.state = state;
+    if (reason) this.lastReason = reason;
     this.sendToRenderer('gateway:state', {
       state,
       reason,
