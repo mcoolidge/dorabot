@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono } from "next/font/google";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 
 const jetbrainsMono = JetBrains_Mono({
@@ -72,7 +73,7 @@ export default function RootLayout({
       <head>
         <link rel="preconnect" href="https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev" />
       </head>
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">{children}<SpeedInsights /></body>
     </html>
   );
 }

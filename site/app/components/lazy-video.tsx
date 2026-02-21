@@ -5,13 +5,12 @@ import { useRef, useState, useEffect } from "react"
 export function LazyVideo({
   src,
   className,
-  ...props
 }: {
   src: string
   className?: string
-} & React.VideoHTMLAttributes<HTMLVideoElement>) {
+}) {
   const ref = useRef<HTMLDivElement>(null)
-  const [visible, setVisible] = useState(false)
+  const [load, setLoad] = useState(false)
 
   useEffect(() => {
     const el = ref.current
@@ -19,31 +18,30 @@ export function LazyVideo({
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          setVisible(true)
+          // small delay so we don't fire all at once during fast scroll
+          const t = setTimeout(() => setLoad(true), 150)
           observer.disconnect()
+          return () => clearTimeout(t)
         }
       },
-      { rootMargin: "200px" }
+      { rootMargin: "0px" }
     )
     observer.observe(el)
     return () => observer.disconnect()
   }, [])
 
   return (
-    <div ref={ref}>
-      {visible ? (
+    <div ref={ref} className="aspect-video bg-surface-base/30">
+      {load && (
         <video
           src={src}
           autoPlay
           loop
           muted
           playsInline
-          preload="metadata"
+          preload="none"
           className={className}
-          {...props}
         />
-      ) : (
-        <div className={`aspect-video bg-surface-base/30 ${className ?? ""}`} />
       )}
     </div>
   )
