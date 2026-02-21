@@ -25,6 +25,7 @@ export function DemoVideo() {
               loop
               muted
               playsInline
+              preload="none"
               poster={POSTER_URL}
               className="h-full w-full object-cover"
             >
