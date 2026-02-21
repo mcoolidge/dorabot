@@ -42,7 +42,7 @@ export function DemoVideo() {
   }, [])
 
   return (
-    <div ref={containerRef} className="mx-auto mt-10 w-full max-w-6xl hero-stagger hero-stagger-7">
+    <div ref={containerRef} className="mx-auto mt-10 w-full max-w-6xl">
       <div className="relative overflow-hidden rounded-xl border border-border bg-surface-base/50 shadow-2xl shadow-black/20" style={{ aspectRatio: "3200/2160" }}>
         {state !== "full" ? (
           <div className="absolute inset-0 cursor-pointer" onClick={playFull}>
@@ -64,6 +64,7 @@ export function DemoVideo() {
                 <img
                   src="/demo-poster.jpg"
                   alt="dorabot demo"
+                  decoding="async"
                   loading="eager"
                   className="h-full w-full object-cover"
                 />
