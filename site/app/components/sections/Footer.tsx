@@ -14,6 +14,12 @@ export function Footer() {
             GitHub
           </a>
           <a
+            href="https://discord.gg/FH99jkvMz"
+            className="hover:text-text transition-colors"
+          >
+            Discord
+          </a>
+          <a
             href="https://twitter.com/ishanxnagpal"
             className="hover:text-text transition-colors"
           >

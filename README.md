@@ -12,7 +12,7 @@
 
   Works with your existing Claude Code or OpenAI Codex subscription. No extra API key needed.
 
-  [**Download for macOS**](https://github.com/suitedaces/dorabot/releases/latest) · [Website](https://dora.so) · [Demo](https://github.com/suitedaces/dorabot/releases/download/v0.2.3/annotated-demo-telegram.mp4)
+  [**Download for macOS**](https://github.com/suitedaces/dorabot/releases/latest) · [Website](https://dora.so) · [Discord](https://discord.gg/FH99jkvMz) · [Demo](https://github.com/suitedaces/dorabot/releases/download/v0.2.3/annotated-demo-telegram.mp4)
 
 </div>
 
