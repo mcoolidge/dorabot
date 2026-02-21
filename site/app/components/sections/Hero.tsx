@@ -1,5 +1,6 @@
 "use client"
 
+import { useState, useRef, useCallback } from "react"
 import { motion } from "motion/react"
 import { HoverBorderGradient } from "../aceternity/hover-border-gradient"
 import { Brain, Target, MousePointer2 } from "lucide-react"
@@ -64,6 +65,61 @@ function OpenAILogo() {
     <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5 text-[#10A37F]">
       <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.985 5.985 0 0 0-3.998 2.9 6.046 6.046 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.051 6.051 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v2.999l-2.597 1.5-2.607-1.5z"/>
     </svg>
+  )
+}
+
+const PREVIEW_URL = "https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/demo-preview.mp4"
+const FULL_VIDEO_URL = "https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/dorabot-demo-annotated.mp4"
+
+function DemoVideo() {
+  const [playing, setPlaying] = useState(false)
+  const fullVideoRef = useRef<HTMLVideoElement>(null)
+
+  const playFull = useCallback(() => {
+    setPlaying(true)
+    setTimeout(() => fullVideoRef.current?.play(), 0)
+  }, [])
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 24 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.6, delay: 0.5 }}
+      className="mx-auto mt-10 w-full max-w-6xl"
+    >
+      <div className="relative overflow-hidden rounded-xl border border-border bg-surface-base/50 shadow-2xl shadow-black/20" style={{ aspectRatio: "3200/2160" }}>
+        {!playing ? (
+          <div className="absolute inset-0 cursor-pointer" onClick={playFull}>
+            <video
+              autoPlay
+              loop
+              muted
+              playsInline
+              className="h-full w-full object-cover"
+            >
+              <source src={PREVIEW_URL} type="video/mp4" />
+            </video>
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/10 transition-colors hover:bg-black/20">
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-white/90 shadow-lg backdrop-blur-sm transition-transform hover:scale-110 sm:h-20 sm:w-20">
+                <svg className="h-7 w-7 translate-x-0.5 text-gray-900 sm:h-8 sm:w-8" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              </div>
+              <span className="rounded-full bg-black/50 px-4 py-1.5 text-sm font-medium text-white backdrop-blur-sm">Click to play</span>
+            </div>
+          </div>
+        ) : (
+          <video
+            ref={fullVideoRef}
+            controls
+            playsInline
+            className="absolute inset-0 h-full w-full object-cover"
+          >
+            <source src={FULL_VIDEO_URL} type="video/mp4" />
+          </video>
+        )}
+      </div>
+    </motion.div>
   )
 }
 
@@ -193,27 +249,7 @@ export function Hero() {
           </motion.div>
 
           {/* Demo video */}
-          <motion.div
-            initial={{ opacity: 0, y: 24 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.5 }}
-            className="mx-auto mt-10 w-full max-w-6xl"
-          >
-            <div className="overflow-hidden rounded-xl border border-border bg-surface-base/50 shadow-2xl shadow-black/20">
-              <video
-                autoPlay
-                loop
-                muted
-                controls
-                playsInline
-                preload="none"
-                className="w-full"
-                poster="/gifs/memory.gif"
-              >
-                <source src="https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/dorabot-demo-annotated.mp4#t=4" type="video/mp4" />
-              </video>
-            </div>
-          </motion.div>
+          <DemoVideo />
         </div>
       </div>
     </section>
