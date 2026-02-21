@@ -46,7 +46,7 @@ export function Navbar() {
             alt="dorabot"
             width={133}
             height={182}
-            className="h-10 sm:h-11 dorabot-alive"
+            className="h-10 w-auto sm:h-11 dorabot-alive"
             style={{ imageRendering: "pixelated" }}
           />
           <span className="text-base text-text-secondary font-medium">dorabot</span>
