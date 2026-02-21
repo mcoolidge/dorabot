@@ -4,7 +4,6 @@ import { useState, useRef, useCallback, useEffect } from "react"
 
 const PREVIEW_URL = "https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/demo-preview.mp4"
 const FULL_VIDEO_URL = "https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/dorabot-demo-annotated.mp4"
-const POSTER_URL = "https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev/demo-poster.jpg"
 
 export function DemoVideo() {
   const [state, setState] = useState<"poster" | "preview" | "full">("poster")
@@ -54,18 +53,21 @@ export function DemoVideo() {
                 muted
                 playsInline
                 preload="auto"
-                poster={POSTER_URL}
+                poster="/demo-poster.webp"
                 className="h-full w-full object-cover"
               >
                 <source src={PREVIEW_URL} type="video/mp4" />
               </video>
             ) : (
-              <img
-                src={POSTER_URL}
-                alt="dorabot demo"
-                loading="lazy"
-                className="h-full w-full object-cover"
-              />
+              <picture>
+                <source srcSet="/demo-poster.webp" type="image/webp" />
+                <img
+                  src="/demo-poster.jpg"
+                  alt="dorabot demo"
+                  loading="lazy"
+                  className="h-full w-full object-cover"
+                />
+              </picture>
             )}
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/10 transition-colors hover:bg-black/20">
               <div className="flex h-16 w-16 items-center justify-center rounded-full bg-white/90 shadow-lg backdrop-blur-sm transition-transform hover:scale-110 sm:h-20 sm:w-20">

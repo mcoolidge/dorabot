@@ -70,9 +70,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={`dark ${jetbrainsMono.variable}`} suppressHydrationWarning>
-      <head>
-        <link rel="preconnect" href="https://pub-4316e19c5e0c4561879dabd80ec994f7.r2.dev" />
-      </head>
+      <head />
       <body className="antialiased">{children}<SpeedInsights /></body>
     </html>
   );
