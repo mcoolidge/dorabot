@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -198,6 +198,12 @@ export function ensureWorkspace(dir?: string): void {
   mkdirSync(TELEGRAM_MEDIA_DIR, { recursive: true });
   mkdirSync(WHATSAPP_DIR, { recursive: true });
   mkdirSync(BROWSER_PROFILE_DIR, { recursive: true });
+
+  // Clean up legacy TLS directory (removed in v0.2.13, replaced by Unix sockets)
+  const legacyTlsDir = join(DORABOT_DIR, 'tls');
+  if (existsSync(legacyTlsDir)) {
+    try { rmSync(legacyTlsDir, { recursive: true }); } catch {}
+  }
 
   const soulPath = join(wsDir, 'SOUL.md');
   if (!existsSync(soulPath)) {

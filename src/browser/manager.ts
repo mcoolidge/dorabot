@@ -25,6 +25,37 @@ let context: BrowserContext | null = null;
 let activePage: Page | null = null;
 let browserProcess: ReturnType<typeof import('node:child_process').spawn> | null = null;
 
+// idle timeout — kill browser after 10 min of no activity
+const BROWSER_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+let lastActivityAt = 0;
+let idleCheckTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Call on every browser action to reset the idle timer. */
+export function touchBrowserActivity(): void {
+  lastActivityAt = Date.now();
+}
+
+function startIdleCheck(): void {
+  if (idleCheckTimer) return;
+  idleCheckTimer = setInterval(async () => {
+    if (!browser) {
+      stopIdleCheck();
+      return;
+    }
+    if (Date.now() - lastActivityAt > BROWSER_IDLE_TIMEOUT_MS) {
+      console.log('[browser] idle timeout reached, closing browser');
+      await closeBrowser();
+    }
+  }, 60_000); // check every 60s
+}
+
+function stopIdleCheck(): void {
+  if (idleCheckTimer) {
+    clearInterval(idleCheckTimer);
+    idleCheckTimer = null;
+  }
+}
+
 // browser executable → real macOS user data dir
 const BROWSER_INFO: { exec: string; dataDir: string; appName: string }[] = [
   {
@@ -128,6 +159,8 @@ export async function launchBrowser(config: BrowserConfig = {}): Promise<void> {
       context = contexts[0] || await browser.newContext();
       const pages = context.pages();
       activePage = pages[0] || await context.newPage();
+      touchBrowserActivity();
+      startIdleCheck();
       console.log(`[browser] connected to existing CDP on port ${existingPort}`);
       return;
     } catch {
@@ -167,6 +200,8 @@ export async function launchBrowser(config: BrowserConfig = {}): Promise<void> {
   context = contexts[0] || await browser.newContext();
   const pages = context.pages();
   activePage = pages[0] || await context.newPage();
+  touchBrowserActivity();
+  startIdleCheck();
   console.log(`[browser] launched ${info.appName} with CDP on port ${port}, profile: ${profileDir}`);
 }
 
@@ -181,9 +216,12 @@ export async function connectToExisting(config: BrowserConfig = {}): Promise<voi
   context = contexts[0] || await browser.newContext();
   const pages = context.pages();
   activePage = pages[0] || await context.newPage();
+  touchBrowserActivity();
+  startIdleCheck();
 }
 
 export async function ensureBrowser(config: BrowserConfig = {}): Promise<Page> {
+  touchBrowserActivity();
   if (activePage) {
     try {
       await activePage.title(); // check if still alive
@@ -226,6 +264,7 @@ export function getContext(): BrowserContext | null {
 }
 
 export async function closeBrowser(): Promise<void> {
+  stopIdleCheck();
   if (browser) {
     try { await browser.close(); } catch {}
     browser = null;

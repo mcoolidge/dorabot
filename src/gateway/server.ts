@@ -25,6 +25,7 @@ import { getDefaultAuthDir } from '../channels/whatsapp/session.js';
 import { validateTelegramToken } from '../channels/telegram/bot.js';
 import { insertEvent, queryEventsBySessionCursor, deleteEventsUpToSeq, cleanupOldEvents } from './event-log.js';
 import { getChannelHandler } from '../tools/messaging.js';
+import { closeBrowser } from '../browser/manager.js';
 import { setScheduler } from '../tools/index.js';
 import { loadPlans, savePlans, type Plan, appendPlanLog, readPlanLogs, readPlanDoc, createPlanFromIdea } from '../tools/plans.js';
 import { loadIdeas, saveIdeas } from '../ideas/tools.js';
@@ -582,6 +583,21 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const RUN_EVENT_PRUNE_GRACE_MS = 10 * 60 * 1000;
   // keep replay data for an extended window across crashes; normal pruning is run-end based.
   cleanupOldEvents(7 * 24 * 60 * 60);
+
+  // kill orphaned Chrome processes from previous runs (dorabot browser profile)
+  try {
+    const { execSync: execSyncLocal } = await import('node:child_process');
+    const pgrep = execSyncLocal('pgrep -f "user-data-dir.*\\.dorabot/browser/profile"', { encoding: 'utf-8', timeout: 3000 }).trim();
+    if (pgrep) {
+      const pids = pgrep.split('\n').filter(Boolean);
+      for (const pid of pids) {
+        try { process.kill(parseInt(pid, 10), 'SIGTERM'); } catch {}
+      }
+      console.log(`[gateway] killed ${pids.length} orphaned browser process(es)`);
+    }
+  } catch {
+    // no matching processes, or pgrep failed — fine
+  }
 
   function scheduleRunEventPrune(sessionKey: string, maxSeqInclusive: number): void {
     if (!streamV2Enabled) return;
@@ -5272,6 +5288,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       runEventPruneTimers.clear();
       scheduler?.stop();
       await channelManager.stopAll();
+      await closeBrowser();
       await disposeAllProviders();
 
       // close all file watchers

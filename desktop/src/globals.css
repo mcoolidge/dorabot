@@ -323,7 +323,12 @@
 
 .dorabot-alive {
   animation: dorabot-float 3s ease-in-out infinite, dorabot-glow 2s ease-in-out infinite;
-  will-change: transform, opacity;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dorabot-alive {
+    animation: none;
+  }
 }
 
 /* markdown viewer (file viewer) */
