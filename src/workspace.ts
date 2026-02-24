@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -18,9 +18,7 @@ export const LOGS_DIR = join(DORABOT_DIR, 'logs');
 export const SESSIONS_DIR = join(DORABOT_DIR, 'sessions');
 export const SKILLS_DIR = join(DORABOT_DIR, 'skills');
 export const TMP_DIR = join(DORABOT_DIR, 'tmp');
-export const TLS_DIR = join(DORABOT_DIR, 'tls');
-export const TLS_CERT_PATH = join(TLS_DIR, 'cert.pem');
-export const TLS_KEY_PATH = join(TLS_DIR, 'key.pem');
+export const GATEWAY_SOCKET_PATH = join(DORABOT_DIR, 'gateway.sock');
 export const TELEGRAM_DIR = join(DORABOT_DIR, 'telegram');
 export const TELEGRAM_TOKEN_PATH = join(TELEGRAM_DIR, 'token');
 export const TELEGRAM_MEDIA_DIR = join(DORABOT_DIR, 'media', 'telegram');
@@ -196,11 +194,16 @@ export function ensureWorkspace(dir?: string): void {
   mkdirSync(SESSIONS_DIR, { recursive: true });
   mkdirSync(SKILLS_DIR, { recursive: true });
   mkdirSync(TMP_DIR, { recursive: true });
-  mkdirSync(TLS_DIR, { recursive: true });
   mkdirSync(TELEGRAM_DIR, { recursive: true });
   mkdirSync(TELEGRAM_MEDIA_DIR, { recursive: true });
   mkdirSync(WHATSAPP_DIR, { recursive: true });
   mkdirSync(BROWSER_PROFILE_DIR, { recursive: true });
+
+  // Clean up legacy TLS directory (removed in v0.2.13, replaced by Unix sockets)
+  const legacyTlsDir = join(DORABOT_DIR, 'tls');
+  if (existsSync(legacyTlsDir)) {
+    try { rmSync(legacyTlsDir, { recursive: true }); } catch {}
+  }
 
   const soulPath = join(wsDir, 'SOUL.md');
   if (!existsSync(soulPath)) {

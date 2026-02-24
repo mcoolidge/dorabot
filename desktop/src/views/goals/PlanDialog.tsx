@@ -58,7 +58,7 @@ export function PlanDialog({ task, open, onOpenChange, gateway, onSaved }: Props
       setEditing(false);
       onSaved?.();
     } catch {
-      toast.error('failed to save plan');
+      toast.error('Failed to save plan');
     } finally {
       setSaving(false);
     }

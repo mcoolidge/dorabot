@@ -22,7 +22,8 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/componen
 import {
   MessageSquare, Radio, Zap, Brain, Settings2,
   Sparkles, LayoutGrid, Loader2, Star,
-  Sun, Moon, Clock, FileSearch, Plug, Folder, FolderOpen, X
+  Sun, Moon, Clock, FileSearch, Plug, Folder, FolderOpen, X,
+  ShieldAlert, CalendarCheck, Target, FlaskConical, KeyRound
 } from 'lucide-react';
 
 type SessionFilter = 'all' | 'desktop' | 'telegram' | 'whatsapp';
@@ -234,7 +235,11 @@ export default function App() {
           break;
         }
         case 'tool_approval':
-          toast.warning('approval needed', { description: event.toolName, duration: 10000 });
+          toast.warning(`Approve: ${event.toolName}`, {
+            description: 'Agent is waiting for your approval to proceed.',
+            icon: <ShieldAlert className="w-4 h-4 text-amber-400" />,
+            duration: 10000,
+          });
           if (!windowFocused) {
             notify(`approve tool: ${event.toolName}`);
           }
@@ -242,7 +247,10 @@ export default function App() {
           playNotifSound();
           break;
         case 'calendar':
-          toast('calendar event', { description: event.summary, duration: 5000 });
+          toast(event.summary, {
+            icon: <CalendarCheck className="w-4 h-4 text-blue-400" />,
+            duration: 5000,
+          });
           if (!windowFocused) {
             notify(`calendar: ${event.summary}`);
             playNotifSound();
@@ -250,7 +258,14 @@ export default function App() {
           break;
         case 'goals.update':
           if (!allowPing('goals.update')) break;
-          toast('goals updated', { description: 'new goal/task activity', duration: 4000 });
+          toast('Goals updated', {
+            icon: <Target className="w-4 h-4 text-orange-400" />,
+            duration: 4000,
+            action: {
+              label: 'View',
+              onClick: () => tabState.openTab({ id: 'view:goals', type: 'goals', label: 'Goals', closable: true }),
+            },
+          });
           if (!windowFocused) {
             notify('goals updated');
             playNotifSound();
@@ -258,23 +273,67 @@ export default function App() {
           break;
         case 'research.update':
           if (!allowPing('research.update')) break;
-          toast('research updated', { description: 'new research activity', duration: 4000 });
+          toast('Research updated', {
+            icon: <FlaskConical className="w-4 h-4 text-purple-400" />,
+            duration: 4000,
+            action: {
+              label: 'View',
+              onClick: () => tabState.openTab({ id: 'view:research', type: 'research', label: 'Research', closable: true }),
+            },
+          });
           if (!windowFocused) {
             notify('research updated');
             playNotifSound();
           }
           break;
         case 'auth.required':
-          toast.error(`${event.provider} authentication required`, { description: event.reason, duration: 8000 });
+          toast.error(`${event.provider} auth required`, {
+            description: event.reason,
+            icon: <KeyRound className="w-4 h-4 text-red-400" />,
+            duration: 8000,
+            action: {
+              label: 'Settings',
+              onClick: () => tabState.openTab({ id: 'view:settings', type: 'settings', label: 'Settings', closable: true }),
+            },
+          });
           if (!windowFocused) {
             notify(`${event.provider} auth required`);
             playNotifSound();
           }
           break;
+        case 'channel.message': {
+          const preview = event.body.length > 80 ? event.body.slice(0, 80) + '...' : event.body;
+          const sender = event.senderName || event.senderId;
+          const channelLabel = event.channel.charAt(0).toUpperCase() + event.channel.slice(1);
+          const channelIcon = event.channel === 'telegram'
+            ? <img src={telegramImg} className="w-4 h-4" alt="" />
+            : event.channel === 'whatsapp'
+              ? <img src={whatsappImg} className="w-4 h-4" alt="" />
+              : <MessageSquare className="w-4 h-4 text-muted-foreground" />;
+          toast(`${sender}`, {
+            description: preview,
+            icon: channelIcon,
+            duration: 5000,
+            action: {
+              label: 'Open',
+              onClick: () => {
+                const sessionKey = `${event.channel}:dm:${event.chatId}`;
+                tabState.openChatTab({
+                  sessionKey,
+                  chatId: event.chatId,
+                  channel: event.channel,
+                  label: `${channelLabel} - ${sender}`,
+                });
+              },
+            },
+          });
+          playNotifSound();
+          break;
+        }
       }
     };
     return () => { gw.onNotifiableEventRef.current = null; };
-  }, [gw.onNotifiableEventRef, notify]);
+  }, [gw.onNotifiableEventRef, notify, tabState]);
 
   const filteredSessions = useMemo(() => {
     if (sessionFilter === 'all') return gw.sessions;
@@ -394,7 +453,14 @@ export default function App() {
     focusGroupDown: () => { focusInputOnGroupSwitch.current = true; layout.focusGroupDirection('down'); },
   }), [tabState, gw, handleNavClick, layout]);
 
-  useKeyboardShortcuts(shortcutActions);
+  const isAgentRunning = useMemo(() => {
+    const tab = tabState.activeTab;
+    if (!tab || !isChatTab(tab)) return false;
+    const status = gw.sessionStates[tab.sessionKey]?.agentStatus;
+    return !!status && status !== 'idle';
+  }, [tabState.activeTab, gw.sessionStates]);
+
+  useKeyboardShortcuts(shortcutActions, { isAgentRunning });
 
   // Cmd+W via Electron IPC (before-input-event blocks DOM keydown, so main process sends IPC instead)
   useEffect(() => {
@@ -553,7 +619,7 @@ export default function App() {
 
     if (mode === '2-col') {
       return (
-        <ResizablePanelGroup orientation="horizontal" className="h-full">
+        <ResizablePanelGroup key="2-col" orientation="horizontal" className="h-full">
           <ResizablePanel defaultSize="50%" minSize="20%">
             <EditorGroupPanel
               group={visibleGroups[0]}
@@ -575,7 +641,7 @@ export default function App() {
 
     if (mode === '2-row') {
       return (
-        <ResizablePanelGroup orientation="vertical" className="h-full">
+        <ResizablePanelGroup key="2-row" orientation="vertical" className="h-full">
           <ResizablePanel defaultSize="50%" minSize="20%">
             <EditorGroupPanel
               group={visibleGroups[0]}
@@ -597,7 +663,7 @@ export default function App() {
 
     // 2x2
     return (
-      <ResizablePanelGroup orientation="horizontal" className="h-full">
+      <ResizablePanelGroup key="2x2" orientation="horizontal" className="h-full">
         <ResizablePanel defaultSize="50%" minSize="20%">
           <ResizablePanelGroup orientation="vertical">
             <ResizablePanel defaultSize="50%" minSize="20%">
@@ -644,7 +710,8 @@ export default function App() {
   return (
     <TooltipProvider delayDuration={300}>
       <Toaster
-        position="bottom-right"
+        position="top-right"
+        offset={{ top: 48, right: 12 }}
         gap={6}
         toastOptions={{
           className: 'font-mono text-xs !rounded-lg !shadow-lg',
@@ -688,7 +755,7 @@ export default function App() {
 
       {/* titlebar — pure drag chrome */}
       <div className="h-11 bg-card glass border-b border-border flex items-center pl-[78px] pr-4 shrink-0" style={{ WebkitAppRegion: 'drag' } as any}>
-        <img src={dorabotImg} alt="dorabot" className="w-10 h-10 mr-1 dorabot-alive" />
+        <img src={dorabotImg} alt="dorabot" className="h-8 mr-1 dorabot-alive" style={{ imageRendering: 'pixelated' }} />
         <span className="text-base text-muted-foreground font-medium">dorabot</span>
         <a
           href="https://github.com/suitedaces/dorabot"

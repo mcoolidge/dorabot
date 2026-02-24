@@ -1,10 +1,71 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
-import { execFile, execSync } from 'node:child_process';
+import { execFile, execSync, spawn } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
+import { dirname } from 'node:path';
 import type { Provider, ProviderRunOptions, ProviderMessage, ProviderAuthStatus, ProviderQueryResult, RunHandle } from './types.js';
+import { guardImages } from './image-guard.js';
 import { DORABOT_DIR, CLAUDE_KEY_PATH, CLAUDE_OAUTH_PATH } from '../workspace.js';
 import { getSecretStorageBackend, keychainDelete, keychainLoad, keychainStore, type SecretStorageBackend } from '../auth/keychain.js';
+
+// ── Node binary resolution ──────────────────────────────────────────
+// Electron apps get a minimal PATH. Resolve the full path to node once at startup
+// so the SDK can spawn its CLI subprocess regardless of PATH state.
+let _nodeBinary: string | null = null;
+function resolveNodeBinary(): string {
+  if (_nodeBinary) return _nodeBinary;
+
+  // 1. If current process IS node (not Electron), use its path directly
+  if (!process.versions.electron && process.execPath) {
+    _nodeBinary = process.execPath;
+    console.log(`[claude] node binary (execPath): ${_nodeBinary}`);
+    return _nodeBinary;
+  }
+
+  // 2. Try resolving from login shell (handles nvm, fnm, volta, homebrew)
+  try {
+    const shell = process.env.SHELL || '/bin/zsh';
+    _nodeBinary = execSync(`${shell} -lc 'command -v node'`, {
+      timeout: 5000,
+      encoding: 'utf-8',
+    }).trim();
+    if (_nodeBinary && existsSync(_nodeBinary)) {
+      console.log(`[claude] node binary (shell): ${_nodeBinary}`);
+      return _nodeBinary;
+    }
+  } catch { /* continue */ }
+
+  // 3. Check common locations
+  const candidates = [
+    '/usr/local/bin/node',
+    '/opt/homebrew/bin/node',
+    `${process.env.HOME}/.nvm/current/bin/node`,
+    `${process.env.HOME}/.fnm/current/bin/node`,
+    `${process.env.HOME}/.volta/bin/node`,
+  ];
+  // Also check nvm versioned paths
+  try {
+    const nvmDir = process.env.NVM_DIR || `${process.env.HOME}/.nvm`;
+    const defaultAlias = `${nvmDir}/alias/default`;
+    if (existsSync(defaultAlias)) {
+      const version = readFileSync(defaultAlias, 'utf-8').trim();
+      candidates.unshift(`${nvmDir}/versions/node/${version}/bin/node`);
+    }
+  } catch { /* ignore */ }
+
+  for (const c of candidates) {
+    if (existsSync(c)) {
+      _nodeBinary = c;
+      console.log(`[claude] node binary (fallback): ${_nodeBinary}`);
+      return _nodeBinary;
+    }
+  }
+
+  // 4. Last resort: just "node" and hope PATH is fixed elsewhere
+  _nodeBinary = 'node';
+  console.log('[claude] node binary: using bare "node" (not resolved)');
+  return _nodeBinary;
+}
 
 // ── File paths ──────────────────────────────────────────────────────
 const KEY_FILE = CLAUDE_KEY_PATH;
@@ -570,10 +631,14 @@ export class ClaudeProvider implements Provider {
     // SDK constraint: string prompt → isSingleUserTurn=true → closes stdin
     // after first result. AsyncIterable prompt → keeps stdin open.
 
+    type ContentBlock =
+      | { type: 'text'; text: string }
+      | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+
     type UserMsg = {
       type: 'user';
       session_id: string;
-      message: { role: 'user'; content: Array<{ type: 'text'; text: string }> };
+      message: { role: 'user'; content: ContentBlock[] };
       parent_tool_use_id: null;
     };
 
@@ -581,17 +646,31 @@ export class ClaudeProvider implements Provider {
     let waitingForMessage: ((msg: UserMsg) => void) | null = null;
     let closed = false;
 
-    const makeUserMsg = (text: string): UserMsg => ({
-      type: 'user',
-      session_id: '',
-      message: { role: 'user', content: [{ type: 'text', text }] },
-      parent_tool_use_id: null,
-    });
+    const makeUserMsg = async (text: string, images?: import('./types.js').ImageAttachment[]): Promise<UserMsg> => {
+      const content: ContentBlock[] = [];
+      if (images?.length) {
+        const { valid, warnings } = await guardImages(images);
+        for (const img of valid) {
+          content.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
+        }
+        if (warnings.length) {
+          text += '\n\n[Image warning: ' + warnings.join('; ') + ']';
+        }
+      }
+      content.push({ type: 'text', text });
+      return {
+        type: 'user',
+        session_id: '',
+        message: { role: 'user', content },
+        parent_tool_use_id: null,
+      };
+    };
 
-    // Seed the queue with the initial prompt
-    messageQueue.push(makeUserMsg(opts.prompt));
+    // Seed the queue with the initial prompt (async for image processing)
+    const seedReady = makeUserMsg(opts.prompt, opts.images).then(msg => messageQueue.push(msg));
 
     async function* messageGenerator(): AsyncGenerator<UserMsg, void, unknown> {
+      await seedReady;
       while (!closed && !opts.abortController?.signal.aborted) {
         if (messageQueue.length > 0) {
           yield messageQueue.shift()!;
@@ -612,20 +691,27 @@ export class ClaudeProvider implements Provider {
 
     const handle: RunHandle = {
       get active() { return !closed; },
-      inject(text: string): boolean {
+      inject(text: string, images?: import('./types.js').ImageAttachment[]): boolean {
         if (closed) return false;
-        const msg = makeUserMsg(text);
-        if (waitingForMessage) {
-          waitingForMessage(msg);
-        } else {
-          messageQueue.push(msg);
-        }
+        makeUserMsg(text, images).then(msg => {
+          if (closed) return;
+          if (waitingForMessage) {
+            waitingForMessage(msg);
+          } else {
+            messageQueue.push(msg);
+          }
+        });
         return true;
       },
       close() {
         closed = true;
         if (waitingForMessage) {
-          waitingForMessage(makeUserMsg(''));
+          waitingForMessage({
+            type: 'user',
+            session_id: '',
+            message: { role: 'user', content: [{ type: 'text', text: '' }] },
+            parent_tool_use_id: null,
+          });
         }
       },
       async interrupt() { await queryRef?.interrupt(); },
@@ -664,6 +750,9 @@ export class ClaudeProvider implements Provider {
     }
 
     // ── SDK query with async generator prompt ───────────────────────
+    // Resolve node binary for spawnClaudeCodeProcess (fixes ENOENT in Electron)
+    const nodePath = resolveNodeBinary();
+
     const q = query({
       prompt: messageGenerator() as any,
       options: {
@@ -688,6 +777,27 @@ export class ClaudeProvider implements Provider {
         canUseTool: opts.canUseTool as any,
         abortController: opts.abortController,
         stderr: (data: string) => console.error(`[claude:stderr] ${data.trimEnd()}`),
+        // Custom spawner: use resolved node path instead of bare "node" lookup
+        spawnClaudeCodeProcess: (spawnOpts: { command: string; args: string[]; cwd?: string; env: Record<string, string | undefined>; signal: AbortSignal }) => {
+          // If the SDK resolved a native binary, use it directly. Otherwise use our resolved node.
+          const cmd = spawnOpts.command === 'node' ? nodePath : spawnOpts.command;
+          const proc = spawn(cmd, spawnOpts.args, {
+            cwd: spawnOpts.cwd,
+            env: spawnOpts.env as NodeJS.ProcessEnv,
+            stdio: ['pipe', 'pipe', 'pipe'],
+            signal: spawnOpts.signal,
+          });
+          return {
+            stdin: proc.stdin!,
+            stdout: proc.stdout!,
+            get killed() { return proc.killed; },
+            get exitCode() { return proc.exitCode; },
+            kill: proc.kill.bind(proc),
+            on: proc.on.bind(proc),
+            once: proc.once.bind(proc),
+            off: proc.off.bind(proc),
+          };
+        },
       } as any,
     });
 

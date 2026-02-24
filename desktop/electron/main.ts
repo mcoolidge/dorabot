@@ -2,14 +2,27 @@ import { app, BrowserWindow, Tray, Menu, nativeImage, session, ipcMain, Notifica
 import { autoUpdater } from 'electron-updater';
 import { is } from '@electron-toolkit/utils';
 import * as path from 'path';
-import { readFileSync, existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { GatewayManager } from './gateway-manager';
-import { GATEWAY_TOKEN_PATH } from './dorabot-paths';
+import { GatewayBridge } from './gateway-bridge';
+import { GATEWAY_LOG_PATH } from './dorabot-paths';
+
+function readGatewayLogs(): string {
+  try {
+    if (!existsSync(GATEWAY_LOG_PATH)) return '';
+    const content = readFileSync(GATEWAY_LOG_PATH, 'utf-8');
+    const lines = content.split('\n');
+    return lines.slice(-30).join('\n').trim();
+  } catch {
+    return '';
+  }
+}
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
 let gatewayManager: GatewayManager | null = null;
+let gatewayBridge: GatewayBridge | null = null;
 let updateCheckInterval: ReturnType<typeof setInterval> | null = null;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -73,6 +86,7 @@ function setupAutoUpdater(): void {
   });
 
   ipcMain.on('update-install', () => {
+    isQuitting = true;
     autoUpdater.quitAndInstall(false, true);
   });
 
@@ -110,7 +124,8 @@ function createWindow(): void {
     minHeight: 600,
     show: false,
     titleBarStyle: 'hiddenInset',
-    backgroundColor: '#0d1117',
+    vibrancy: 'under-window',
+    visualEffectState: 'active',
     icon: getIconPath(),
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
@@ -166,7 +181,11 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    gatewayBridge?.setWindow(null);
   });
+
+  // Wire up gateway bridge to this window
+  gatewayBridge?.setWindow(mainWindow);
 }
 
 function createTray(): void {
@@ -209,58 +228,42 @@ function updateTrayTitle(status: string): void {
   }
 }
 
-// Trust the self-signed gateway TLS cert for localhost connections
-app.on('certificate-error', (event, _webContents, url, _error, _cert, callback) => {
-  const parsed = new URL(url);
-  if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
-    event.preventDefault();
-    callback(true);
-  } else {
-    callback(false);
-  }
-});
-
 app.on('ready', async () => {
-  // Accept self-signed gateway cert for localhost WebSocket connections
-  session.defaultSession.setCertificateVerifyProc((request, callback) => {
-    if (request.hostname === 'localhost' || request.hostname === '127.0.0.1') {
-      callback(0); // trust
-    } else {
-      callback(-3); // use default verification
-    }
-  });
-
   if (app.dock) {
     app.dock.setIcon(getIconPath());
   }
+
+  // Create gateway bridge (main process WebSocket to gateway)
+  gatewayBridge = new GatewayBridge();
+
+  // IPC: renderer sends messages through the bridge
+  ipcMain.on('gateway:send', (_event, data: string) => {
+    gatewayBridge?.send(data);
+  });
+
+  // IPC: renderer requests current bridge state
+  ipcMain.handle('gateway:state', () => {
+    return gatewayBridge?.getState() ?? { state: 'disconnected', reconnectCount: 0 };
+  });
 
   // Start gateway server before creating UI
   gatewayManager = new GatewayManager({
     onReady: () => {
       console.log('[main] Gateway ready');
       updateTrayTitle('online');
-      // Push token to renderer in case preload missed it (fresh install race)
-      try {
-        if (existsSync(GATEWAY_TOKEN_PATH)) {
-          const token = readFileSync(GATEWAY_TOKEN_PATH, 'utf-8').trim();
-          if (token && mainWindow) {
-            mainWindow.webContents.send('gateway-token', token);
-          }
-        }
-      } catch (err) {
-        console.error('[main] Failed to push token to renderer:', err);
-      }
+      // Gateway is listening, now connect the bridge
+      gatewayBridge?.connect();
     },
     onError: (error) => {
       console.error('[main] Gateway error:', error);
-      // Keep tray status actionable without getting stuck in a hard "error" state
-      // for transient startup issues. onReady/onExit will update it again.
       updateTrayTitle('offline');
+      mainWindow?.webContents.send('gateway-error', { error, logs: readGatewayLogs() });
     },
     onExit: (code) => {
       console.log('[main] Gateway exited:', code);
       if (!isQuitting) {
         updateTrayTitle('offline');
+        mainWindow?.webContents.send('gateway-error', { error: `Gateway exited with code ${code}`, logs: readGatewayLogs() });
       }
     },
   });
@@ -303,5 +306,6 @@ app.on('activate', () => {
 app.on('before-quit', () => {
   isQuitting = true;
   if (updateCheckInterval) clearInterval(updateCheckInterval);
+  gatewayBridge?.disconnect();
   gatewayManager?.stop();
 });

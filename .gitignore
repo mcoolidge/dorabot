@@ -6,6 +6,8 @@ node_modules/
 
 # build outputs
 dist/
+main.js
+.next/
 dist-electron/
 out/
 desktop/dist/
@@ -47,3 +49,18 @@ ideas/
 site/.next/
 site/out/
 site/node_modules/
+
+demo-video/
+
+# sprite source frames (keep dorabot.png APNG, ignore individual frames)
+desktop/public/sprites/idle_*.png
+desktop/public/sprites/blink_*.png
+desktop/public/sprites/walk_*.png
+desktop/public/sprites/wave_*.png
+desktop/public/sprites/think_*.png
+desktop/public/sprites/celebrate_*.png
+desktop/public/sprites/type_*.png
+desktop/public/sprites/sleep_*.png
+
+# external skills
+skills/anthropic-skills/

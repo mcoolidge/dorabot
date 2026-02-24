@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect, useMemo, type KeyboardEvent } from 'react';
-import { dorabotComputerImg } from '../assets';
+import { useState, useRef, useEffect, useMemo, useCallback, type KeyboardEvent, type ClipboardEvent, type DragEvent } from 'react';
+import { DorabotSprite } from '../components/DorabotSprite';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { useGateway, ChatItem, AskUserQuestion } from '../hooks/useGateway';
+import type { useGateway, ChatItem, AskUserQuestion, ImageAttachment } from '../hooks/useGateway';
 import { ApprovalList } from '@/components/approval-ui';
 import { ToolUI } from '@/components/tool-ui';
 import { ToolStreamCard, hasStreamCard } from '@/components/tool-stream';
@@ -22,7 +22,8 @@ import {
   FileText, FilePlus, Pencil, FolderSearch, FileSearch, Terminal,
   Globe, Search, Bot, MessageCircle, ListChecks, FileCode,
   MessageSquare, Camera, Monitor, Clock, Wrench, ArrowUp, LayoutGrid,
-  Smile, Image,
+  Smile, Image, Brain, MapPin, PenLine, GitPullRequest, Radio,
+  Paperclip, X,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -209,6 +210,39 @@ function ModelSelector({ gateway, disabled }: { gateway: ReturnType<typeof useGa
   );
 }
 
+function ThinkingItem({ item }: { item: Extract<ChatItem, { type: 'thinking' }> }) {
+  const [open, setOpen] = useState(true);
+  const wasStreaming = useRef(true);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (wasStreaming.current && !item.streaming) setOpen(false);
+    wasStreaming.current = !!item.streaming;
+  }, [item.streaming]);
+
+  useEffect(() => {
+    if (item.streaming && bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    }
+  }, [item.content, item.streaming]);
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="thinking-container my-1">
+      <CollapsibleTrigger className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors py-0.5 group">
+        <Brain className="w-3 h-3" />
+        <span>{item.streaming ? 'Thinking...' : 'Thought'}</span>
+        <ChevronRight className="w-3 h-3 transition-transform group-data-[state=open]:rotate-90" />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div ref={bodyRef} className="thinking-body thinking-body-faded prose-chat text-muted-foreground text-xs">
+          <Markdown remarkPlugins={[remarkGfm]}>{item.content}</Markdown>
+          {item.streaming && <span className="streaming-cursor" />}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 function ToolUseItem({ item }: { item: Extract<ChatItem, { type: 'tool_use' }> }) {
   const [manualOpen, setManualOpen] = useState<boolean | null>(null);
   const hasOutput = item.output != null;
@@ -216,12 +250,13 @@ function ToolUseItem({ item }: { item: Extract<ChatItem, { type: 'tool_use' }> }
   const displayName = toolText(item.name, isPending ? 'pending' : 'done');
   const useStreamCard = hasStreamCard(item.name);
 
-  // Read/Grep/Glob are fast — start collapsed to avoid flicker
-  const startCollapsed = item.name === 'Read' || item.name === 'Grep' || item.name === 'Glob';
+  // Read/Grep/Glob are fast, AskUserQuestion shows answered state collapsed
+  const startCollapsed = item.name === 'Read' || item.name === 'Grep' || item.name === 'Glob' || item.name === 'AskUserQuestion';
   const isOpen = manualOpen !== null ? manualOpen : (isPending && !startCollapsed);
 
   const inputDetail = (() => {
     const p = safeParse(item.input);
+    if (item.name === 'AskUserQuestion' && item.output) return item.output;
     return p.command?.split('\n')[0] || p.file_path || p.pattern || p.url || p.query || p.description || '';
   })();
 
@@ -373,105 +408,122 @@ function AskUserQuestionPanel({
     (useOther[q.question] && otherTexts[q.question]) || selections[q.question];
   const isLast = step === total - 1;
 
+  // Countdown timer (5 min timeout from gateway)
+  const [secondsLeft, setSecondsLeft] = useState(300);
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    const interval = setInterval(() => setSecondsLeft(s => Math.max(0, s - 1)), 1000);
+    return () => clearInterval(interval);
+  }, []);
+  const mins = Math.floor(secondsLeft / 60);
+  const secs = secondsLeft % 60;
+
   return (
-    <div className="p-3 border-t border-primary bg-card shrink-0 space-y-3">
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
-          <Badge variant="outline" className="text-[10px] text-primary">{q.header}</Badge>
+    <div className="border-t border-primary bg-card shrink-0">
+      {/* Collapsible header - always visible */}
+      <button
+        className="flex items-center justify-between w-full px-3 py-1.5 hover:bg-secondary/30 transition-colors"
+        onClick={() => setCollapsed(c => !c)}
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <MessageCircle className="w-3 h-3 text-primary shrink-0" />
+          <span className="text-xs font-medium truncate">{q.header}: {q.question}</span>
           {total > 1 && (
-            <div className="flex items-center gap-1">
-              {question.questions.map((_, i) => (
-                <div
-                  key={i}
+            <span className="text-[10px] text-muted-foreground shrink-0">{step + 1}/{total}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className={cn('text-[10px] tabular-nums', secondsLeft < 60 ? 'text-destructive' : 'text-muted-foreground')}>
+            {mins}:{secs.toString().padStart(2, '0')}
+          </span>
+          {collapsed ? <ChevronRight className="w-3 h-3 text-muted-foreground" /> : <ChevronDown className="w-3 h-3 text-muted-foreground" />}
+        </div>
+      </button>
+
+      {/* Expandable content */}
+      {!collapsed && (
+        <div className="px-3 pb-2 space-y-1.5">
+          <div className="flex flex-col gap-1">
+            {options.map((opt, oi) => {
+              const selected = q.multiSelect
+                ? (selections[q.question] || '').split(', ').includes(opt.label)
+                : selections[q.question] === opt.label && !useOther[q.question];
+              return (
+                <button
+                  key={oi}
                   className={cn(
-                    'h-1.5 rounded-full transition-all',
-                    i === step ? 'w-4 bg-primary' : i < step ? 'w-1.5 bg-primary/50' : 'w-1.5 bg-muted-foreground/30'
+                    'flex flex-col items-start px-2.5 py-1.5 rounded-md border text-left w-full transition-colors',
+                    selected
+                      ? 'border-primary bg-primary/10'
+                      : 'border-border bg-background hover:border-primary/50'
                   )}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-        <p className="text-[13px]">{q.question}</p>
-        <div className="flex flex-col gap-1">
-          {options.map((opt, oi) => {
-            const selected = q.multiSelect
-              ? (selections[q.question] || '').split(', ').includes(opt.label)
-              : selections[q.question] === opt.label && !useOther[q.question];
-            return (
-              <button
-                key={oi}
-                className={cn(
-                  'flex flex-col items-start px-3 py-2 rounded-md border text-left w-full transition-colors',
-                  selected
-                    ? 'border-primary bg-primary/10'
-                    : 'border-border bg-background hover:border-primary/50'
-                )}
-                onClick={() => handleSelect(q.question, opt.label, q.multiSelect)}
-              >
-                <span className="text-xs font-semibold">{opt.label}</span>
-                <span className="text-[11px] text-muted-foreground">{opt.description}</span>
-              </button>
-            );
-          })}
-          <button
-            className={cn(
-              'flex flex-col items-start px-3 py-2 rounded-md border text-left w-full transition-colors',
-              useOther[q.question]
-                ? 'border-primary bg-primary/10'
-                : 'border-border bg-background hover:border-primary/50'
-            )}
-            onClick={() => {
-              setUseOther(prev => ({ ...prev, [q.question]: true }));
-              setSelections(prev => ({ ...prev, [q.question]: '' }));
-            }}
-          >
-            <span className="text-xs font-semibold">Other</span>
-            <span className="text-[11px] text-muted-foreground">type your own answer</span>
-          </button>
-        </div>
-        {useOther[q.question] && (
-          <input
-            className="w-full mt-1 px-3 py-2 bg-background border border-primary rounded-md text-xs outline-none placeholder:text-muted-foreground"
-            placeholder="type your answer..."
-            value={otherTexts[q.question] || ''}
-            onChange={e => setOtherTexts(prev => ({ ...prev, [q.question]: e.target.value }))}
-            autoFocus
-          />
-        )}
-      </div>
-      <div className="flex justify-between">
-        <div>
-          {step > 0 && (
-            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setStep(s => s - 1)}>back</Button>
-          )}
-        </div>
-        <div className="flex gap-2">
-          {streaming ? (
-            <span className="text-[10px] text-muted-foreground animate-pulse">loading options...</span>
-          ) : (
-            <>
-              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={isLast ? handleSubmit : () => setStep(s => s + 1)}>skip</Button>
-              {isLast ? (
-                <Button size="sm" className="h-7 text-xs" onClick={handleSubmit} disabled={!currentAnswered}>answer</Button>
-              ) : (
-                <Button size="sm" className="h-7 text-xs" onClick={() => setStep(s => s + 1)} disabled={!currentAnswered}>next</Button>
+                  onClick={() => handleSelect(q.question, opt.label, q.multiSelect)}
+                >
+                  <span className="text-xs font-medium">{opt.label}</span>
+                  {opt.description && <span className="text-[10px] text-muted-foreground leading-tight">{opt.description}</span>}
+                </button>
+              );
+            })}
+            <button
+              className={cn(
+                'flex flex-col items-start px-2.5 py-1.5 rounded-md border text-left w-full transition-colors',
+                useOther[q.question]
+                  ? 'border-primary bg-primary/10'
+                  : 'border-border bg-background hover:border-primary/50'
               )}
-            </>
+              onClick={() => {
+                setUseOther(prev => ({ ...prev, [q.question]: true }));
+                setSelections(prev => ({ ...prev, [q.question]: '' }));
+              }}
+            >
+              <span className="text-xs font-medium">Other</span>
+              <span className="text-[10px] text-muted-foreground">type your own answer</span>
+            </button>
+          </div>
+          {useOther[q.question] && (
+            <input
+              className="w-full px-2.5 py-1.5 bg-background border border-primary rounded-md text-xs outline-none placeholder:text-muted-foreground"
+              placeholder="type your answer..."
+              value={otherTexts[q.question] || ''}
+              onChange={e => setOtherTexts(prev => ({ ...prev, [q.question]: e.target.value }))}
+              onKeyDown={e => { if (e.key === 'Enter' && isLast) handleSubmit(); else if (e.key === 'Enter') setStep(s => s + 1); }}
+              autoFocus
+            />
           )}
+          <div className="flex justify-between pt-0.5">
+            <div>
+              {step > 0 && (
+                <Button variant="outline" size="sm" className="h-6 text-[11px] px-2" onClick={() => setStep(s => s - 1)}>back</Button>
+              )}
+            </div>
+            <div className="flex gap-1.5">
+              {streaming ? (
+                <span className="text-[10px] text-muted-foreground animate-pulse">loading...</span>
+              ) : (
+                <>
+                  <Button variant="outline" size="sm" className="h-6 text-[11px] px-2" onClick={isLast ? handleSubmit : () => setStep(s => s + 1)}>skip</Button>
+                  {isLast ? (
+                    <Button size="sm" className="h-6 text-[11px] px-2" onClick={handleSubmit} disabled={!currentAnswered}>answer</Button>
+                  ) : (
+                    <Button size="sm" className="h-6 text-[11px] px-2" onClick={() => setStep(s => s + 1)} disabled={!currentAnswered}>next</Button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
 
 const SUGGESTIONS: { icon: LucideIcon; label: string; prompt: string }[] = [
-  { icon: Sparkles, label: 'personalize dorabot', prompt: 'help me personalize you' },
-  { icon: Globe, label: 'browse the web', prompt: 'open https://news.ycombinator.com and summarize the top stories' },
-  { icon: Image, label: 'generate an image', prompt: 'generate a cool image for me' },
-  { icon: Smile, label: 'make a meme', prompt: 'make me a funny meme' },
-  { icon: Clock, label: 'set a reminder', prompt: 'remind me in 30 minutes to take a break' },
-  { icon: Camera, label: 'take a screenshot', prompt: 'take a screenshot of my screen' },
+  { icon: Search, label: 'scan my competitors', prompt: 'research the latest AI coding tools on GitHub and Hacker News, summarize what\'s new' },
+  { icon: MapPin, label: 'plan my weekend', prompt: 'help me plan a trip this weekend, find restaurants, activities, and keep it under budget' },
+  { icon: PenLine, label: 'draft a launch post', prompt: 'write a Reddit launch post for my project, make it authentic and not too salesy' },
+  { icon: GitPullRequest, label: 'review my latest PR', prompt: 'review the most recent pull request on this repo' },
+  { icon: Brain, label: 'what did we do this week?', prompt: 'summarize everything we worked on this week from your memory' },
+  { icon: Radio, label: 'set up a research agent', prompt: 'every morning, scan Hacker News and Twitter for AI agent news and send me a summary on Telegram' },
 ];
 
 const SHORTCUTS: { keys: string; label: string }[] = [
@@ -484,6 +536,29 @@ const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: 'Esc', label: 'stop' },
 ];
 
+function ImagePreviewStrip({ images, onRemove }: { images: ImageAttachment[]; onRemove: (index: number) => void }) {
+  if (images.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 px-3 pt-3">
+      {images.map((img, j) => (
+        <div key={j} className="relative group">
+          <img
+            src={`data:${img.mediaType};base64,${img.data}`}
+            alt="attachment"
+            className="h-16 rounded border border-border/40 object-cover"
+          />
+          <button
+            className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+            onClick={() => onRemove(j)}
+          >
+            <X className="w-2.5 h-2.5" />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function getGreeting(): string {
   const h = new Date().getHours();
   if (h < 12) return 'good morning';
@@ -494,11 +569,59 @@ function getGreeting(): string {
 export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, sessionKey, onNavigateSettings }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
+  const [attachedImages, setAttachedImages] = useState<ImageAttachment[]>([]);
+  const [compact, setCompact] = useState(false);
   const nextAutoScrollBehaviorRef = useRef<ScrollBehavior>('auto');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const landingInputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const landingRef = useRef<HTMLDivElement>(null);
   const isRunning = agentStatus !== 'idle';
   const isEmpty = chatItems.length === 0;
+
+  useEffect(() => {
+    const el = landingRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([e]) => setCompact(e.contentRect.height < 480));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const addImagesFromFiles = useCallback((files: FileList | File[]) => {
+    const imageFiles = Array.from(files).filter(f => f.type.startsWith('image/'));
+    for (const file of imageFiles) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        const base64 = result.split(',')[1];
+        if (base64) {
+          setAttachedImages(prev => [...prev, { data: base64, mediaType: file.type }]);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  }, []);
+
+  const handlePaste = useCallback((e: ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const imageItems = Array.from(items).filter(i => i.type.startsWith('image/'));
+    if (imageItems.length === 0) return;
+    e.preventDefault();
+    for (const item of imageItems) {
+      const file = item.getAsFile();
+      if (file) addImagesFromFiles([file]);
+    }
+  }, [addImagesFromFiles]);
+
+  const handleDrop = useCallback((e: DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer?.files) addImagesFromFiles(e.dataTransfer.files);
+  }, [addImagesFromFiles]);
+
+  const handleDragOver = useCallback((e: DragEvent) => {
+    e.preventDefault();
+  }, []);
 
   // Derive streamingQuestion from this session's chatItems (not the global active session)
   const streamingQuestion = useMemo<AskUserQuestion['questions'] | null>(() => {
@@ -531,14 +654,16 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
 
   const handleSend = async (overridePrompt?: string) => {
     const prompt = overridePrompt || input.trim();
-    if (!prompt || sending || pendingQuestion) return;
+    if ((!prompt && attachedImages.length === 0) || sending || pendingQuestion) return;
 
+    const images = attachedImages.length > 0 ? [...attachedImages] : undefined;
     nextAutoScrollBehaviorRef.current = 'smooth';
     if (!overridePrompt) setInput('');
+    setAttachedImages([]);
     setSending(true);
     try {
       const chatId = sessionKey ? sessionKey.split(':').slice(2).join(':') : undefined;
-      await gateway.sendMessage(prompt, sessionKey, chatId);
+      await gateway.sendMessage(prompt || 'What do you see in this image?', sessionKey, chatId, images);
     } finally {
       setSending(false);
     }
@@ -561,7 +686,21 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
         return (
           <div key={i} className="flex gap-2 px-2 py-1.5 my-1 bg-secondary rounded-md min-w-0">
             <span className="text-primary font-semibold shrink-0">{'>'}</span>
-            <span className="text-foreground break-words min-w-0">{item.content}</span>
+            <div className="min-w-0">
+              {item.images?.length ? (
+                <div className="flex flex-wrap gap-1.5 mb-1.5">
+                  {item.images.map((img, j) => (
+                    <img
+                      key={j}
+                      src={`data:${img.mediaType};base64,${img.data}`}
+                      alt="attached"
+                      className="max-h-32 rounded border border-border/40 object-cover"
+                    />
+                  ))}
+                </div>
+              ) : null}
+              {item.content && <span className="text-foreground break-words">{item.content}</span>}
+            </div>
           </div>
         );
       case 'text':
@@ -584,22 +723,10 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
             </div>
           );
         }
-        if (item.name === 'AskUserQuestion') {
-          return (
-            <div key={i} className="flex items-center gap-2 text-[10px] text-muted-foreground py-0.5">
-              <MessageCircle className="w-3 h-3" />
-              <span>{item.streaming ? 'asking...' : item.output ? 'answered' : 'waiting for answer'}</span>
-            </div>
-          );
-        }
+        if (item.name === 'AskUserQuestion' && !item.output) return <div key={i} style={{ height: 0, overflow: 'hidden' }} />;
         return <div key={i} className="my-1.5"><InlineErrorBoundary><ToolUseItem item={item} /></InlineErrorBoundary></div>;
       case 'thinking':
-        return (
-          <div key={i} className="text-muted-foreground italic text-xs border-l-2 border-border pl-2 my-1 break-words min-w-0">
-            {item.content}
-            {item.streaming && <span className="streaming-cursor" />}
-          </div>
-        );
+        return <ThinkingItem key={i} item={item} />;
       case 'result':
         return (
           <div key={i} className="flex gap-2 text-[10px] text-muted-foreground py-1 mt-1 border-t border-border">
@@ -619,47 +746,78 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
   const connected = gateway.connectionState === 'connected';
   const authenticated = gateway.providerInfo?.auth?.authenticated ?? true; // assume true until loaded
   const isReady = connected && authenticated;
+  const gatewayFailed = !connected && !!gateway.gatewayError;
 
   // landing page — centered input with suggestions
   if (isEmpty) {
     return (
-      <div className="flex flex-col h-full min-h-0 min-w-0">
+      <div ref={landingRef} className="flex flex-col h-full min-h-0 min-w-0">
         <div className="flex-1 flex items-center justify-center min-h-0 min-w-0">
           <AuroraBackground className="w-full h-full">
-            <div className="w-full max-w-2xl px-6 space-y-6">
+            <div className={cn('w-full mx-auto', compact ? 'space-y-3 px-4' : 'space-y-6 max-w-2xl px-6')}>
               {/* greeting */}
               <div className="text-center space-y-2">
-                <div className="relative w-24 h-24 mx-auto">
-                  <div className="absolute inset-0 rounded-full bg-success/30 blur-xl animate-pulse" />
-                  <img src={dorabotComputerImg} alt="dorabot" className="relative w-24 h-24 dorabot-alive" />
+                <div className="relative mx-auto flex items-center justify-center" style={{ width: compact ? 80 : 136, height: compact ? 80 : 136 }}>
+                  <div className="absolute rounded-full bg-success/30 blur-xl animate-pulse" style={{ width: compact ? 56 : 96, height: compact ? 56 : 96 }} />
+                  <DorabotSprite size={compact ? 56 : 96} className="relative dorabot-alive" />
                 </div>
-                <h1 className="text-lg font-semibold text-foreground">{getGreeting()}</h1>
+                <h1 className={cn('font-semibold text-foreground', compact ? 'text-sm' : 'text-lg')}>{getGreeting()}</h1>
                 <div className="flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
                   <div className={cn('w-1.5 h-1.5 rounded-full', isReady ? 'bg-success' : connected && !authenticated ? 'bg-warning' : connected ? 'bg-success' : 'bg-destructive')} />
-                  {!connected ? 'connecting...' : !authenticated ? <>set up provider in <button type="button" className="underline hover:text-foreground transition-colors" onClick={onNavigateSettings}>Settings</button></> : 'ready'}
+                  {gatewayFailed
+                    ? <span className="text-destructive">{gateway.gatewayError?.error || 'gateway failed to start'}</span>
+                    : !connected ? <>connecting...{gateway.gatewayTelemetry.reconnectCount > 2 && <span className="ml-1 opacity-60">({gateway.gatewayTelemetry.disconnectReason || 'retrying'})</span>}</>
+                    : !authenticated ? <>set up provider in <button type="button" className="underline hover:text-foreground transition-colors" onClick={onNavigateSettings}>Settings</button></>
+                    : 'ready'}
                 </div>
+                {gatewayFailed && gateway.gatewayError?.logs && (
+                  <details className="mt-2 max-w-md mx-auto text-left">
+                    <summary className="text-[10px] text-muted-foreground cursor-pointer hover:text-foreground transition-colors select-none">view logs</summary>
+                    <pre className="mt-1 max-h-48 overflow-auto rounded-md bg-muted/50 p-3 text-[10px] font-mono text-muted-foreground whitespace-pre-wrap break-all">{gateway.gatewayError.logs}</pre>
+                  </details>
+                )}
               </div>
 
               {/* centered input */}
-              <Card className="rounded-2xl chat-input-area">
+              <Card className="rounded-2xl chat-input-area" onDrop={handleDrop} onDragOver={handleDragOver}>
+                <ImagePreviewStrip images={attachedImages} onRemove={j => setAttachedImages(prev => prev.filter((_, k) => k !== j))} />
                 <Textarea
                   ref={landingInputRef}
                   value={input}
                   onChange={e => setInput(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder={!connected ? 'waiting for gateway...' : !authenticated ? 'set up your AI provider to get started' : 'what can i help with?'}
+                  onPaste={handlePaste}
+                  placeholder={!connected ? 'waiting for gateway...' : !authenticated ? 'set up your AI provider to get started' : 'what are we building?'}
                   disabled={!isReady}
                   className="w-full min-h-[80px] max-h-[200px] resize-none text-sm border-0 rounded-2xl bg-transparent shadow-none focus-visible:ring-0"
                   rows={2}
                 />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={e => { if (e.target.files) addImagesFromFiles(e.target.files); e.target.value = ''; }}
+                />
                 <div className="flex items-center px-3 pb-3">
                   <ModelSelector gateway={gateway} disabled={!connected} />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 rounded-lg ml-1"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={!isReady}
+                    title="Attach image"
+                  >
+                    <Paperclip className="w-4 h-4 text-muted-foreground" />
+                  </Button>
                   <span className="flex-1" />
                   <Button
                     size="sm"
                     className="h-8 w-8 p-0 rounded-lg"
                     onClick={() => { handleSend(); }}
-                    disabled={!input.trim() || sending || !isReady}
+                    disabled={(!input.trim() && attachedImages.length === 0) || sending || !isReady}
                   >
                     <ArrowUp className="w-4 h-4" />
                   </Button>
@@ -667,7 +825,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
               </Card>
 
               {/* suggestions */}
-              {isReady && (
+              {isReady && !compact && (
                 <div className="grid grid-cols-1 @sm:grid-cols-2 @lg:grid-cols-3 gap-2">
                   {SUGGESTIONS.map(s => (
                     <button
@@ -683,14 +841,16 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
               )}
 
               {/* keyboard shortcuts */}
-              <div className="flex flex-wrap justify-center gap-x-4 gap-y-1.5 text-[10px] text-muted-foreground/60 pt-2">
-                {SHORTCUTS.map(s => (
-                  <span key={s.keys} className="flex items-center gap-1">
-                    <kbd className="px-1 py-0.5 rounded bg-muted/50 text-[9px] font-mono">{s.keys}</kbd>
-                    <span>{s.label}</span>
-                  </span>
-                ))}
-              </div>
+              {!compact && (
+                <div className="flex flex-wrap justify-center gap-x-4 gap-y-1.5 text-[10px] text-muted-foreground/80 pt-2">
+                  {SHORTCUTS.map(s => (
+                    <span key={s.keys} className="flex items-center gap-1">
+                      <kbd className="px-1.5 py-0.5 rounded border border-border/50 bg-muted/60 text-[10px] font-mono">{s.keys}</kbd>
+                      <span>{s.label}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           </AuroraBackground>
         </div>
@@ -742,19 +902,39 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
 
       {/* input area */}
       <div className="px-4 py-3 shrink-0 min-w-0">
-        <Card className="rounded-2xl chat-input-area">
+        <Card className="rounded-2xl chat-input-area" onDrop={handleDrop} onDragOver={handleDragOver}>
+          <ImagePreviewStrip images={attachedImages} onRemove={j => setAttachedImages(prev => prev.filter((_, k) => k !== j))} />
           <Textarea
             ref={inputRef}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder={connected ? 'type a message...' : 'waiting for gateway...'}
             disabled={!connected || !!pendingQuestion}
             className="w-full min-h-[64px] max-h-[200px] resize-none text-[13px] border-0 rounded-2xl bg-transparent shadow-none focus-visible:ring-0"
             rows={2}
           />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={e => { if (e.target.files) addImagesFromFiles(e.target.files); e.target.value = ''; }}
+          />
           <div className="flex items-center px-3 pb-3">
             <ModelSelector gateway={gateway} disabled={!connected} />
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 w-8 p-0 rounded-lg ml-1"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={!connected}
+              title="Attach image"
+            >
+              <Paperclip className="w-4 h-4 text-muted-foreground" />
+            </Button>
             <span className="flex-1" />
             {isRunning ? (
               <Button
@@ -770,7 +950,7 @@ export function ChatView({ gateway, chatItems, agentStatus, pendingQuestion, ses
                 size="sm"
                 className="h-8 w-8 p-0 rounded-lg"
                 onClick={() => { handleSend(); }}
-                disabled={!input.trim() || sending || !connected}
+                disabled={(!input.trim() && attachedImages.length === 0) || sending || !connected}
               >
                 <ArrowUp className="w-4 h-4" />
               </Button>

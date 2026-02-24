@@ -1,11 +1,11 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'node:http';
-import { createServer as createTlsServer } from 'node:https';
 import { readdirSync, statSync, readFileSync, writeFileSync, existsSync, mkdirSync, rmSync, renameSync, chmodSync, unlinkSync, watch, type FSWatcher } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { execSync } from 'node:child_process';
-import { resolve as pathResolve, join } from 'node:path';
+import { resolve as pathResolve, join, dirname } from 'node:path';
 import { homedir } from 'node:os';
+import { createConnection } from 'node:net';
 
 const resolve = (p: string) => pathResolve(p.startsWith('~') ? p.replace('~', homedir()) : p);
 import type { Config } from '../config.js';
@@ -25,6 +25,7 @@ import { getDefaultAuthDir } from '../channels/whatsapp/session.js';
 import { validateTelegramToken } from '../channels/telegram/bot.js';
 import { insertEvent, queryEventsBySessionCursor, deleteEventsUpToSeq, cleanupOldEvents } from './event-log.js';
 import { getChannelHandler } from '../tools/messaging.js';
+import { closeBrowser } from '../browser/manager.js';
 import { setScheduler } from '../tools/index.js';
 import { loadPlans, savePlans, type Plan, appendPlanLog, readPlanLogs, readPlanDoc, createPlanFromIdea } from '../tools/plans.js';
 import { loadIdeas, saveIdeas } from '../ideas/tools.js';
@@ -40,7 +41,7 @@ import {
   writeTaskPlanDoc,
   getTaskPlanPath,
 } from '../tools/tasks.js';
-import { loadResearch, saveResearch, readResearchContent, type ResearchItem } from '../tools/research.js';
+import { loadResearch, saveResearch, readResearchContent, writeResearchFile, nextId as nextResearchId, type ResearchItem } from '../tools/research.js';
 import { getProvider, getProviderByName, disposeAllProviders } from '../providers/index.js';
 import { isClaudeInstalled, hasOAuthTokens, getApiKey as getClaudeApiKey, getActiveAuthMethod, isOAuthTokenExpired, onClaudeAuthRequired } from '../providers/claude.js';
 import { isCodexInstalled, hasCodexAuth, onCodexAuthRequired } from '../providers/codex.js';
@@ -51,19 +52,14 @@ import { AUTONOMOUS_SCHEDULE_ID, buildAutonomousCalendarItem, PULSE_INTERVALS, D
 import { ensureWorktreeForPlan, getWorktreeStats, mergeWorktreeBranch, pushWorktreePr, removeWorktree } from '../worktree/manager.js';
 import {
   DORABOT_DIR,
+  GATEWAY_SOCKET_PATH,
   GATEWAY_TOKEN_PATH,
   OWNER_CHAT_IDS_PATH,
   SKILLS_DIR,
   TELEGRAM_DIR,
   TELEGRAM_TOKEN_PATH,
-  TLS_CERT_PATH,
-  TLS_DIR,
-  TLS_KEY_PATH,
   ensureWorkspace,
 } from '../workspace.js';
-
-const DEFAULT_PORT = 18789;
-const DEFAULT_HOST = '127.0.0.1';
 
 function macNotify(title: string, body: string) {
   try {
@@ -259,7 +255,10 @@ function buildToolStatusText(completed: ToolEntry[], current: ToolEntry | null):
 
 export type GatewayOptions = {
   config: Config;
+  socketPath?: string;
+  // Deprecated: retained for compatibility with older scripts/config.
   port?: number;
+  // Deprecated: retained for compatibility with older scripts/config.
   host?: string;
 };
 
@@ -274,10 +273,10 @@ export type Gateway = {
 
 export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const { config } = opts;
-  const port = opts.port || config.gateway?.port || DEFAULT_PORT;
-  const host = opts.host || config.gateway?.host || DEFAULT_HOST;
+  const socketPath = opts.socketPath || GATEWAY_SOCKET_PATH;
   const startedAt = Date.now();
   ensureWorkspace();
+  mkdirSync(dirname(socketPath), { recursive: true });
 
   // stable gateway auth token — reuse existing, only generate on first run
   const tokenPath = GATEWAY_TOKEN_PATH;
@@ -315,6 +314,16 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
   // stream event batching: accumulate agent.stream per client, flush every 16ms
   const streamBatches = new Map<WebSocket, { events: string[]; timer: ReturnType<typeof setTimeout> | null }>();
+
+  function flushStreamBatch(ws: WebSocket): void {
+    const batch = streamBatches.get(ws);
+    if (!batch || batch.events.length === 0) return;
+    if (batch.timer) { clearTimeout(batch.timer); batch.timer = null; }
+    if (ws.readyState !== WebSocket.OPEN) { batch.events = []; return; }
+    if (batch.events.length === 1) ws.send(batch.events[0]);
+    else ws.send(JSON.stringify({ event: 'agent.stream_batch', data: batch.events.map(e => JSON.parse(e)) }));
+    batch.events = [];
+  }
 
   function queueStreamEvent(ws: WebSocket, serialized: string): void {
     let batch = streamBatches.get(ws);
@@ -387,6 +396,8 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       if (event.event === 'agent.stream') {
         queueStreamEvent(ws, data);
       } else {
+        // flush pending stream batch before tool_result so client has the tool_use item
+        if (event.event === 'agent.tool_result') flushStreamBatch(ws);
         ws.send(data);
       }
     }
@@ -572,6 +583,21 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
   const RUN_EVENT_PRUNE_GRACE_MS = 10 * 60 * 1000;
   // keep replay data for an extended window across crashes; normal pruning is run-end based.
   cleanupOldEvents(7 * 24 * 60 * 60);
+
+  // kill orphaned Chrome processes from previous runs (dorabot browser profile)
+  try {
+    const { execSync: execSyncLocal } = await import('node:child_process');
+    const pgrep = execSyncLocal('pgrep -f "user-data-dir.*\\.dorabot/browser/profile"', { encoding: 'utf-8', timeout: 3000 }).trim();
+    if (pgrep) {
+      const pids = pgrep.split('\n').filter(Boolean);
+      for (const pid of pids) {
+        try { process.kill(parseInt(pid, 10), 'SIGTERM'); } catch {}
+      }
+      console.log(`[gateway] killed ${pids.length} orphaned browser process(es)`);
+    }
+  } catch {
+    // no matching processes, or pgrep failed — fine
+  }
 
   function scheduleRunEventPrune(sessionKey: string, maxSeqInclusive: number): void {
     if (!streamV2Enabled) return;
@@ -2100,6 +2126,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
   async function handleAgentRun(params: {
     prompt: string;
+    images?: Array<{ data: string; mediaType: string }>;
     sessionKey: string;
     source: string;
     channel?: string;
@@ -2107,7 +2134,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     extraContext?: string;
     messageMetadata?: import('../session/manager.js').MessageMetadata;
   }): Promise<AgentResult | null> {
-    const { prompt, sessionKey, source, channel, cwd, extraContext, messageMetadata } = params;
+    const { prompt, images, sessionKey, source, channel, cwd, extraContext, messageMetadata } = params;
     console.log(`[gateway] agent run: source=${source} sessionKey=${sessionKey} prompt="${prompt.slice(0, 80)}..."`);
 
     // pre-run auth check: if dorabot_oauth token is expired, don't waste a run
@@ -2163,6 +2190,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         const lastPulseAt = pulseItem?.lastRunAt ? new Date(pulseItem.lastRunAt).getTime() : undefined;
         const gen = streamAgent({
           prompt,
+          images,
           sessionId: session?.sessionId,
           resumeId,
           config,
@@ -2685,7 +2713,11 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
         console.log(`[gateway] agent run ended: source=${source} result="${result.result.slice(0, 100)}..." cost=$${result.usage.totalCostUsd?.toFixed(4) || '?'}`);
       } catch (err) {
         console.error(`[gateway] agent error: source=${source}`, err);
-        const errMsg = err instanceof Error ? err.message : String(err);
+        let errMsg = err instanceof Error ? err.message : String(err);
+        // Improve error message for common issues
+        if (errMsg.includes('spawn node ENOENT') || errMsg.includes('spawn node')) {
+          errMsg = 'Node.js not found. Install Node.js (https://nodejs.org) or Claude Code CLI (`npm install -g @anthropic-ai/claude-code`), then restart dorabot.';
+        }
         finishPlanRun(sessionKey, 'error', errMsg);
         finishTaskRun(sessionKey, 'error', errMsg);
         if (isAuthError(err)) {
@@ -2842,6 +2874,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
         case 'chat.send': {
           const prompt = params?.prompt as string;
+          const images = params?.images as Array<{ data: string; mediaType: string }> | undefined;
           if (!prompt) return { id, error: 'prompt required' };
 
           const chatId = (params?.chatId as string) || randomUUID();
@@ -2872,12 +2905,19 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           // try injection into active run first
           const handle = runHandles.get(sessionKey);
           if (handle?.active) {
-            handle.inject(prompt);
+            handle.inject(prompt, images);
             // record injected user message in session (CLI doesn't echo user text back)
+            const injectedContent: Array<Record<string, unknown>> = [];
+            if (images?.length) {
+              for (const img of images) {
+                injectedContent.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } });
+              }
+            }
+            injectedContent.push({ type: 'text', text: prompt });
             fileSessionManager.append(session.sessionId, {
               type: 'user',
               timestamp: new Date().toISOString(),
-              content: { type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] } },
+              content: { type: 'user', message: { role: 'user', content: injectedContent } },
             });
             broadcast({ event: 'agent.user_message', data: {
               source: 'desktop/chat', sessionKey, prompt, injected: true, timestamp: Date.now(),
@@ -2888,6 +2928,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           // no active session — start new run
           handleAgentRun({
             prompt,
+            images,
             sessionKey,
             source: 'desktop/chat',
           });
@@ -4072,6 +4113,30 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
         // ── Research ──
 
+        case 'research.add': {
+          const topic = (params?.topic as string) || 'uncategorized';
+          const title = (params?.title as string) || 'Untitled';
+          const content = (params?.content as string) || '';
+          const research = loadResearch();
+          const now = new Date().toISOString();
+          const item: ResearchItem = {
+            id: nextResearchId(research),
+            topic,
+            title,
+            filePath: '',
+            status: 'active',
+            sources: (params?.sources as string[]) || undefined,
+            tags: (params?.tags as string[]) || undefined,
+            createdAt: now,
+            updatedAt: now,
+          };
+          item.filePath = writeResearchFile(item, content);
+          research.items.push(item);
+          saveResearch(research);
+          broadcast({ event: 'research.update', data: {} });
+          return { id, result: item };
+        }
+
         case 'research.list': {
           const research = loadResearch();
           return { id, result: research.items };
@@ -4099,6 +4164,15 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
           if (params?.sources !== undefined) item.sources = params.sources as string[];
           if (params?.tags !== undefined) item.tags = params.tags as string[];
           item.updatedAt = new Date().toISOString();
+          // rewrite file if content or metadata changed
+          const content = params?.content !== undefined
+            ? params.content as string
+            : readResearchContent(item.filePath);
+          const oldPath = item.filePath;
+          item.filePath = writeResearchFile(item, content);
+          if (oldPath !== item.filePath && existsSync(oldPath)) {
+            try { unlinkSync(oldPath); } catch {}
+          }
           saveResearch(research);
           broadcast({ event: 'research.update', data: {} });
           macNotify('Dora', `Research updated: ${item.title}`);
@@ -4962,41 +5036,58 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     }
   }
 
-  // ── TLS setup ───────────────────────────────────────────────
-  const useTls = config.gateway?.tls !== false;
-  const tlsDir = TLS_DIR;
-  const certPath = TLS_CERT_PATH;
-  const keyPath = TLS_KEY_PATH;
-
-  if (useTls && (!existsSync(certPath) || !existsSync(keyPath))) {
-    console.log('[gateway] generating self-signed TLS certificate...');
-    mkdirSync(tlsDir, { recursive: true });
-    execSync(
-      `openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 ` +
-      `-keyout "${keyPath}" -out "${certPath}" -days 3650 -nodes ` +
-      `-subj "/CN=dorabot-gateway" ` +
-      `-addext "subjectAltName=DNS:localhost,IP:127.0.0.1"`,
-      { stdio: 'ignore' },
-    );
-    chmodSync(keyPath, 0o600);
-    chmodSync(certPath, 0o600);
-    console.log(`[gateway] TLS cert created at ${tlsDir}`);
-  }
-
-  // ── HTTP/HTTPS server ──────────────────────────────────────
+  // ── HTTP server over Unix socket ───────────────────────────
   const requestHandler = (req: import('node:http').IncomingMessage, res: import('node:http').ServerResponse) => {
     if (req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', uptime: Date.now() - startedAt, tls: useTls }));
+      res.end(JSON.stringify({ status: 'ok', uptime: Date.now() - startedAt }));
       return;
     }
     res.writeHead(404);
     res.end();
   };
 
-  const httpServer = useTls
-    ? createTlsServer({ cert: readFileSync(certPath), key: readFileSync(keyPath) }, requestHandler)
-    : createServer(requestHandler);
+  const httpServer = createServer(requestHandler);
+
+  const connectToSocket = (targetPath: string, timeoutMs = 500): Promise<void> => new Promise((resolve, reject) => {
+    const socket = createConnection({ path: targetPath });
+    let settled = false;
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      socket.removeAllListeners();
+      socket.destroy();
+      fn();
+    };
+    socket.once('connect', () => finish(resolve));
+    socket.once('error', (err) => finish(() => reject(err)));
+    socket.setTimeout(timeoutMs, () => {
+      const timeoutErr = new Error(`timeout connecting to socket ${targetPath}`) as NodeJS.ErrnoException;
+      timeoutErr.code = 'ETIMEDOUT';
+      finish(() => reject(timeoutErr));
+    });
+  });
+
+  const prepareGatewaySocket = async (targetPath: string): Promise<void> => {
+    if (!existsSync(targetPath)) return;
+    try {
+      await connectToSocket(targetPath, 400);
+      throw new Error(`gateway already running on ${targetPath}`);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ECONNREFUSED' || code === 'ECONNRESET' || code === 'ENOENT' || code === 'ENOTSOCK') {
+        try {
+          unlinkSync(targetPath);
+          console.log(`[gateway] removed stale socket at ${targetPath}`);
+        } catch (unlinkErr) {
+          const message = unlinkErr instanceof Error ? unlinkErr.message : String(unlinkErr);
+          throw new Error(`failed to remove stale gateway socket ${targetPath}: ${message}`);
+        }
+        return;
+      }
+      throw err;
+    }
+  };
 
   // ── WebSocket origin validation ────────────────────────────
   const allowedOrigins = new Set([
@@ -5160,60 +5251,25 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
     });
   });
 
-  function reclaimGatewayPort(listenPort: number): boolean {
-    try {
-      const out = execSync(`lsof -nP -iTCP:${listenPort} -sTCP:LISTEN -t`, { encoding: 'utf-8' }).trim();
-      if (!out) return false;
-      const pids = out.split('\n').map((v) => Number(v.trim())).filter((v) => Number.isInteger(v) && v > 1);
-      let killedAny = false;
-      for (const pid of pids) {
-        if (pid === process.pid) continue;
-        let command = '';
-        try {
-          command = execSync(`ps -p ${pid} -o command=`, { encoding: 'utf-8' }).trim();
-        } catch {
-          continue;
-        }
-        const looksLikeDorabotGateway = /dorabot|my-agent|dist\/index\.js|src\/index\.ts/i.test(command);
-        if (!looksLikeDorabotGateway) {
-          console.warn(`[gateway] refusing to kill pid ${pid} on port ${listenPort}; command did not match dorabot gateway`);
-          continue;
-        }
-        try {
-          execSync(`kill -TERM ${pid}`);
-          killedAny = true;
-          console.log(`[gateway] terminated stale gateway pid=${pid}`);
-        } catch (err) {
-          console.warn(`[gateway] failed to terminate stale gateway pid=${pid}:`, err);
-        }
-      }
-      return killedAny;
-    } catch {
-      return false;
-    }
-  }
-
+  await prepareGatewaySocket(socketPath);
   await new Promise<void>((resolve, reject) => {
-    httpServer.on('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'EADDRINUSE') {
-        console.log(`[gateway] port ${port} in use, checking for stale dorabot gateway owner...`);
-        const reclaimed = reclaimGatewayPort(port);
-        if (!reclaimed) {
-          reject(new Error(`port ${port} is already in use by a non-dorabot process`));
-          return;
-        }
-        setTimeout(() => {
-          httpServer.listen(port, host, () => {
-            console.log(`[gateway] listening on ${useTls ? 'wss' : 'ws'}://${host}:${port}`);
-            resolve();
-          });
-        }, 500);
-      } else {
-        reject(err);
+    const onError = (err: NodeJS.ErrnoException) => {
+      httpServer.off('error', onError);
+      reject(err);
+    };
+    httpServer.on('error', onError);
+    httpServer.listen(socketPath, () => {
+      httpServer.off('error', onError);
+      try {
+        chmodSync(socketPath, 0o600);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        httpServer.close(() => {
+          reject(new Error(`failed to chmod gateway socket ${socketPath}: ${message}`));
+        });
+        return;
       }
-    });
-    httpServer.listen(port, host, () => {
-      console.log(`[gateway] listening on ${useTls ? 'wss' : 'ws'}://${host}:${port}`);
+      console.log(`[gateway] listening on unix://${socketPath}`);
       resolve();
     });
   });
@@ -5232,6 +5288,7 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
       runEventPruneTimers.clear();
       scheduler?.stop();
       await channelManager.stopAll();
+      await closeBrowser();
       await disposeAllProviders();
 
       // close all file watchers
@@ -5251,7 +5308,14 @@ export async function startGateway(opts: GatewayOptions): Promise<Gateway> {
 
       await new Promise<void>((resolve) => {
         wss.close(() => {
-          httpServer.close(() => resolve());
+          httpServer.close(() => {
+            try {
+              if (existsSync(socketPath)) unlinkSync(socketPath);
+            } catch {
+              // ignore cleanup failures on shutdown
+            }
+            resolve();
+          });
         });
       });
     },
